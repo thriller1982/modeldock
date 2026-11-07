@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-app: #ffffff;
+    --bg-sidebar: #f5f5f7;
+    --bg-subtle: #efeff2;
+    --bg-selected: #e4e4ea;
+    --bg-card: #ffffff;
+    --border-color: #e4e4ea;
+    --border-strong: #cfcfd6;
+    --text-1: #18181b;
+    --text-2: #52525b;
+    --text-3: #65656e;
+    --action-bg: #f97316;
+    --action-fg: #ffffff;
+    --action-hover: #ea620a;
+    --action-text: #c2410c;
+    --action-soft: #fff1e6;
+
+    /* CC Switch v7 Mode Tokens: Direct (Blue) & Route/Gateway (Teal) */
+    --direct-fill: #0a84ff;
+    --direct-text: #0063c7;
+    --direct-soft: #eaf3ff;
+    --direct-solid: #0066cc;
+    --direct-border: #0a84ff;
+
+    --route-fill: #0d9488;
+    --route-text: #06726b;
+    --route-soft: #e7f6f4;
+    --route-solid: #0f766e;
+    --route-border: #0d9488;
+
+    --stack-fill: #7c3aed;
+    --stack-text: #6d28d9;
+    --stack-soft: #f2ecfe;
+    --stack-solid: #6d28d9;
+    --stack-border: #7c3aed;
+
+    --success: #16a34a;
+    --success-text: #007634;
+    --success-soft: #e8f7ee;
+    --warning: #d97706;
+    --warning-text: #a64a00;
+    --warning-soft: #fef3c7;
+    --danger: #dc2626;
+    --danger-text: #b91c1c;
+    --danger-soft: #fee2e2;
+
+    --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+    --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08), 0 1px 3px rgba(16, 24, 40, 0.06);
+    --shadow-lg: 0 20px 40px rgba(16, 24, 40, 0.16), 0 4px 12px rgba(16, 24, 40, 0.08);
+  }
+
+  .dark {
+    --bg-app: #1c1c1e;
+    --bg-sidebar: #161618;
+    --bg-subtle: #26262a;
+    --bg-selected: #313136;
+    --bg-card: #2e2e33;
+    --border-color: #36363c;
+    --border-strong: #4a4a52;
+    --text-1: #e4e4e7;
+    --text-2: #ababb3;
+    --text-3: #9a9aa2;
+    --action-bg: #ea580c;
+    --action-fg: #ffffff;
+    --action-hover: #f06d1f;
+    --action-text: #fb923c;
+    --action-soft: rgba(249, 115, 21, 0.14);
+
+    --direct-fill: #4a8fd9;
+    --direct-text: #8fb8e6;
+    --direct-soft: rgba(74, 143, 217, 0.13);
+    --direct-solid: #2f6db3;
+    --direct-border: rgba(74, 143, 217, 0.55);
+
+    --route-fill: #2a9d8f;
+    --route-text: #7cc4ba;
+    --route-soft: rgba(42, 157, 143, 0.14);
+    --route-solid: #1f7d72;
+    --route-border: rgba(42, 157, 143, 0.55);
+
+    --stack-fill: #8b74d6;
+    --stack-text: #b5a6e3;
+    --stack-soft: rgba(139, 116, 214, 0.14);
+    --stack-solid: #6a52bf;
+    --stack-border: rgba(139, 116, 214, 0.55);
+
+    --success: #4ade80;
+    --success-text: #4ade80;
+    --success-soft: #0f2b1a;
+    --warning: #fbbf24;
+    --warning-text: #fcd34d;
+    --warning-soft: #33260a;
+    --danger: #f87171;
+    --danger-text: #fca5a5;
+    --danger-soft: #3a1414;
+
+    --shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 20px 40px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+}
