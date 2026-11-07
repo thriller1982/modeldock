@@ -608,19 +608,24 @@ export default function App() {
                   刷新
                 </button>
                 <button
-                  onClick={() =>
+                  onClick={() => {
+                    const isCodex = currentTarget.id === 'codex-desktop'
                     setEditingProvider({
                       id: `prov_${Date.now().toString(36)}`,
                       targetId: currentTarget.id,
-                      name: `${APP_SHORT_NAMES[currentTarget.id]} 自定义渠道`,
+                      name: isCodex
+                        ? 'Codex 自定义 Responses 渠道'
+                        : `${APP_SHORT_NAMES[currentTarget.id]} 自定义渠道`,
                       vendor: 'Custom',
-                      baseUrl: 'https://api.deepseek.com/v1',
+                      baseUrl: isCodex ? 'https://api.openai.com/v1' : 'https://api.deepseek.com/v1',
                       apiKey: '',
-                      defaultModel: 'deepseek-chat',
-                      models: ['deepseek-chat', 'deepseek-reasoner'],
+                      defaultModel: isCodex ? 'gpt-5-codex' : 'deepseek-chat',
+                      models: isCodex
+                        ? ['gpt-5-codex', 'gpt-5', 'o3-mini']
+                        : ['deepseek-chat', 'deepseek-reasoner'],
                       protocol: 'openai'
                     })
-                  }
+                  }}
                   className="flex h-8 items-center gap-1.5 rounded-control bg-action px-3 text-xs font-medium text-action-fg shadow-sm transition hover:bg-action-hover"
                 >
                   <Plus className="h-3.5 w-3.5" />
@@ -1601,6 +1606,11 @@ export default function App() {
             <p className="mt-1 text-xs text-fg-3">
               该供应商仅归属于 {APP_SHORT_NAMES[editingProvider.targetId]}，不会影响其他软件的供应商列表
             </p>
+            {editingProvider.targetId === 'codex-desktop' && (
+              <div className="mt-2.5 rounded-control border border-accent/20 bg-accent/5 px-3 py-2 text-xs text-accent">
+                ⚡ <strong>Codex Responses 模式已自动接管</strong>：系统将自动配置 <code>wire_api = &quot;responses&quot;</code>，并把您输入的 API Key 自动同步注入为 Windows 用户环境变量与 <code>~/.codex/.env</code>，无需手动处理 <code>env_key</code>。
+              </div>
+            )}
             <div className="mt-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2">
               <div>
                 <label className="text-xs text-fg-2">标识 ID</label>

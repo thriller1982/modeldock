@@ -57,8 +57,14 @@ export class LocalUsageProxy {
 
           // Build upstream URL
           const base = provider.baseUrl.replace(/\/$/, '')
-          const cleanSub = subPath.replace(/^\/v1/, '')
-          const upstreamUrl = `${base}${cleanSub}`
+          const baseEndsWithV1 = /\/v1$/i.test(base)
+          const subStartsWithV1 = /^\/v1/i.test(subPath)
+
+          let finalPath = subPath
+          if (baseEndsWithV1 && subStartsWithV1) {
+            finalPath = subPath.replace(/^\/v1/i, '')
+          }
+          const upstreamUrl = `${base}${finalPath}`
 
           const chunks: Buffer[] = []
           for await (const chunk of req) {
@@ -169,19 +175,23 @@ export class LocalUsageProxy {
         if (!jsonStr || jsonStr === '[DONE]' || !jsonStr.includes('usage')) continue
         try {
           const obj = JSON.parse(jsonStr)
-          const u = obj.usage || obj.message?.usage
+          const u = obj.usage || obj.response?.usage || obj.message?.usage
           if (u) {
             const pIn = Number(u.prompt_tokens || u.input_tokens || 0)
             const cOut = Number(u.completion_tokens || u.output_tokens || 0)
             const cRead = Number(
               u.prompt_tokens_details?.cached_tokens ??
+                u.input_token_details?.cached_tokens ??
                 u.cache_read_input_tokens ??
                 u.cached_input_tokens ??
                 0
             )
             const cWrite = Number(u.cache_creation_input_tokens || u.cache_write_input_tokens || 0)
             const rTok = Number(
-              u.completion_tokens_details?.reasoning_tokens || u.reasoning_output_tokens || 0
+              u.completion_tokens_details?.reasoning_tokens ||
+                u.output_token_details?.reasoning_tokens ||
+                u.reasoning_output_tokens ||
+                0
             )
 
             // In Anthropic format, input_tokens is only fresh input; in OpenAI format, prompt_tokens includes cached_tokens

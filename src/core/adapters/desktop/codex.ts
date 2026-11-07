@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { exec } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { parse, stringify } from 'smol-toml'
 import { DesktopTargetAdapter } from '../base'
@@ -339,11 +340,21 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
       parsed.model_providers = {}
     }
 
+    const sanitizedId = provider.id.toUpperCase().replace(/[^A-Z0-9_]/g, '_')
+    const envKeyName = useProxy
+      ? 'CODEX_CCSWITCH_PROXY_KEY'
+      : `CODEX_${sanitizedId}_KEY`
+
     parsed.model_providers[providerKey] = {
       name: useProxy ? `CCSwitch Proxy (${provider.name})` : provider.name,
       base_url: useProxy ? `http://127.0.0.1:${proxyPort}/codex/v1` : provider.baseUrl,
-      wire_api: 'chat'
+      wire_api: 'responses',
+      env_key: envKeyName
     }
+
+    // Automatically manage secret key in environment variable and ~/.codex/.env
+    const effectiveKey = useProxy ? (provider.apiKey || 'ccswitch-local-token') : provider.apiKey
+    this.syncEnvironmentVariable(envKeyName, effectiveKey)
 
     fs.writeFileSync(this.configTomlPath, stringify(parsed), 'utf8')
   }
@@ -354,12 +365,96 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
       const raw = fs.readFileSync(this.configTomlPath, 'utf8')
       const parsed = parse(raw) as Record<string, any>
       if (parsed.model_providers && parsed.model_providers[providerId]) {
+        const provBlock = parsed.model_providers[providerId]
+        if (provBlock.env_key) {
+          this.removeEnvironmentVariable(provBlock.env_key)
+        }
         createBackup(this.configTomlPath, this.id)
         delete parsed.model_providers[providerId]
         fs.writeFileSync(this.configTomlPath, stringify(parsed), 'utf8')
       }
     } catch {
       // ignore
+    }
+  }
+
+  private syncEnvironmentVariable(varName: string, value: string): void {
+    // 1. Current in-memory process
+    process.env[varName] = value
+
+    // 2. ~/.codex/.env file (standard for Codex dotenv loader)
+    try {
+      const envFilePath = path.join(this.codexDir, '.env')
+      let lines: string[] = []
+      if (fs.existsSync(envFilePath)) {
+        lines = fs.readFileSync(envFilePath, 'utf8').split(/\r?\n/)
+      }
+      const keyPrefix = `${varName}=`
+      let replaced = false
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].startsWith(keyPrefix) || lines[i].startsWith(`export ${keyPrefix}`)) {
+          lines[i] = `${varName}="${value.replace(/"/g, '\\"')}"`
+          replaced = true
+          break
+        }
+      }
+      if (!replaced) {
+        lines.push(`${varName}="${value.replace(/"/g, '\\"')}"`)
+      }
+      fs.writeFileSync(
+        envFilePath,
+        lines
+          .filter(
+            (l, idx) =>
+              idx === 0 || l.trim().length > 0 || (lines[idx - 1] && lines[idx - 1].trim().length > 0)
+          )
+          .join('\n') + '\n',
+        'utf8'
+      )
+    } catch (e) {
+      console.warn('[CodexAdapter] Failed to write ~/.codex/.env:', e)
+    }
+
+    // 3. Persistent Windows User Environment Variable (accessible by Codex.exe & terminal)
+    if (process.platform === 'win32' && value) {
+      try {
+        const safeName = varName.replace(/[^A-Za-z0-9_]/g, '')
+        const b64Val = Buffer.from(value, 'utf8').toString('base64')
+        const psCmd = `[System.Environment]::SetEnvironmentVariable('${safeName}', [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64Val}')), 'User')`
+        exec(`powershell -NoProfile -NonInteractive -Command "${psCmd}"`, (err) => {
+          if (err) console.warn('[CodexAdapter] Failed to set Windows user env var:', err.message)
+        })
+      } catch (e) {
+        console.warn('[CodexAdapter] Error setting Windows User environment variable:', e)
+      }
+    }
+  }
+
+  private removeEnvironmentVariable(varName: string): void {
+    delete process.env[varName]
+
+    try {
+      const envFilePath = path.join(this.codexDir, '.env')
+      if (fs.existsSync(envFilePath)) {
+        const lines = fs.readFileSync(envFilePath, 'utf8').split(/\r?\n/)
+        const keyPrefix = `${varName}=`
+        const filtered = lines.filter(
+          (l) => !l.startsWith(keyPrefix) && !l.startsWith(`export ${keyPrefix}`)
+        )
+        fs.writeFileSync(envFilePath, filtered.join('\n'), 'utf8')
+      }
+    } catch {
+      // ignore
+    }
+
+    if (process.platform === 'win32') {
+      try {
+        const safeName = varName.replace(/[^A-Za-z0-9_]/g, '')
+        const psCmd = `[System.Environment]::SetEnvironmentVariable('${safeName}', [string]::Empty, 'User')`
+        exec(`powershell -NoProfile -NonInteractive -Command "${psCmd}"`, () => {})
+      } catch {
+        // ignore
+      }
     }
   }
 

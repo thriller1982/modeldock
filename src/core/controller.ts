@@ -189,6 +189,16 @@ export class CoreController {
       list.push(provider)
     }
     saveStore(store)
+
+    // If this provider is currently the active one, immediately apply to config and env
+    if (store.activeProviderByTarget[targetId] === provider.id) {
+      const useProxy = store.modeByTarget[targetId] === 'gateway'
+      const adapter = registry.getById(targetId)
+      if (adapter) {
+        adapter.applyProvider(provider, useProxy, usageProxy.getPort())
+      }
+    }
+
     return store
   }
 
