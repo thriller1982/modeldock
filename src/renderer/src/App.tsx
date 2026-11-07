@@ -24,6 +24,7 @@ import {
   Play,
   Plug,
   Plus,
+  Power,
   RefreshCw,
   Route,
   Search,
@@ -528,6 +529,7 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState<string | null>(null)
   const [usageFilter, setUsageFilter] = useState<string>('all')
+  const [autoLaunch, setAutoLaunch] = useState<boolean>(false)
 
   // Skill states
   const [skills, setSkills] = useState<UnifiedSkill[]>([])
@@ -570,10 +572,11 @@ export default function App() {
   const refreshAll = async () => {
     setLoading(true)
     try {
-      const [dashData, targetsData, skillsData] = await Promise.all([
+      const [dashData, targetsData, skillsData, autoLaunchData] = await Promise.all([
         clientApi.getDashboard(),
         clientApi.getTargets(),
-        clientApi.getSkills()
+        clientApi.getSkills(),
+        clientApi.getAutoLaunch().catch(() => ({ enabled: false, isPackaged: false }))
       ])
       setDashboard(dashData)
       setDesktopTargets(targetsData.desktop)
@@ -581,6 +584,9 @@ export default function App() {
       setStore(targetsData.store)
       setSkills(skillsData.skills || [])
       setSkillsHubPath(skillsData.hubPath || '')
+      if (autoLaunchData) {
+        setAutoLaunch(!!autoLaunchData.enabled)
+      }
     } catch (e: any) {
       notify(`加载数据失败: ${e.message}`)
     } finally {
@@ -713,6 +719,26 @@ export default function App() {
       setViewingSkillContent({ id: skill.id, name: skill.name, content })
     } catch (e: any) {
       notify(`读取 Skill 内容失败: ${e.message}`)
+    }
+  }
+
+  const handleToggleAutoLaunch = async () => {
+    const next = !autoLaunch
+    setAutoLaunch(next)
+    try {
+      await clientApi.setAutoLaunch(next)
+      notify(next ? '已开启开机自动启动' : '已关闭开机自动启动')
+    } catch (e: any) {
+      setAutoLaunch(!next)
+      notify(`设置开机自启失败: ${e.message}`)
+    }
+  }
+
+  const handleOpenBackupsFolder = async () => {
+    try {
+      await clientApi.openBackupsFolder()
+    } catch (e: any) {
+      notify(`打开备份目录失败: ${e.message}`)
     }
   }
 
@@ -2072,12 +2098,109 @@ export default function App() {
             <header className="flex h-[52px] shrink-0 items-center justify-between border-b border-border pe-4 ps-6">
               <div className="flex items-center gap-2.5">
                 <Settings className="h-5 w-5 text-fg-1" />
-                <h1 className="text-[18px] font-semibold text-fg-1">设置与本地网关状态</h1>
+                <h1 className="text-[18px] font-semibold text-fg-1">系统设置与网关状态</h1>
               </div>
+              <button
+                onClick={refreshAll}
+                className="flex h-8 items-center gap-1.5 rounded-control border border-border bg-surface px-2.5 text-xs text-fg-2 transition hover:border-border-strong hover:text-fg-1"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+                刷新状态
+              </button>
             </header>
             <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+              {/* Card 1: 基础系统设置 (开机自启开关) */}
+              <div className="rounded-panel border border-border bg-surface p-5 shadow-v7-sm space-y-4">
+                <h3 className="text-[14px] font-semibold text-fg-1 flex items-center gap-2">
+                  <Power className="h-4 w-4 text-action" />
+                  系统启动设置
+                </h3>
+
+                <div className="flex items-center justify-between gap-4 py-2 border-t border-border pt-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-medium text-fg-1">开机自动启动 (Run on Startup)</span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                          autoLaunch
+                            ? 'bg-success-soft text-success-text'
+                            : 'bg-subtle text-fg-3'
+                        }`}
+                      >
+                        {autoLaunch ? '● 已开启自启' : '○ 未开启'}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-fg-3">
+                      Windows 登录后自动在后台启动 CC Switch，保持通用 Skill 实时同步、配置快速切换与本地用量网关就绪。
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={autoLaunch}
+                    onClick={handleToggleAutoLaunch}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      autoLaunch ? 'bg-action' : 'bg-subtle-hover border-border'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                        autoLaunch ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {/* Card 2: 存储与备份管理 */}
+              <div className="rounded-panel border border-border bg-surface p-5 shadow-v7-sm space-y-4">
+                <h3 className="text-[14px] font-semibold text-fg-1 flex items-center gap-2">
+                  <FolderOpen className="h-4 w-4 text-direct" />
+                  存储与备份目录
+                </h3>
+
+                <div className="space-y-3 border-t border-border pt-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px] font-medium text-fg-1">通用 Skill 大本营</div>
+                      <div className="font-mono text-xs text-fg-3 truncate mt-0.5">
+                        {skillsHubPath || '~/.agents/skills'}
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleOpenSkillsFolder}
+                      className="flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-border bg-surface px-2.5 text-xs text-fg-1 transition hover:bg-subtle"
+                    >
+                      <FolderOpen className="h-3.5 w-3.5 text-fg-2" />
+                      打开大本营
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 border-t border-border/50 pt-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px] font-medium text-fg-1">配置自动备份历史 (Backups)</div>
+                      <div className="font-mono text-xs text-fg-3 truncate mt-0.5">
+                        ~/.ccswitch-lite/backups（每次改写前自动快照留存）
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleOpenBackupsFolder}
+                      className="flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-border bg-surface px-2.5 text-xs text-fg-1 transition hover:bg-subtle"
+                    >
+                      <History className="h-3.5 w-3.5 text-fg-2" />
+                      查看备份
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 3: 本地透明路由与用量统计网关 */}
               <div className="rounded-panel border border-border bg-surface p-5 shadow-v7-sm space-y-3">
-                <h3 className="text-[14px] font-semibold text-fg-1">本地透明路由与用量统计网关</h3>
+                <h3 className="text-[14px] font-semibold text-fg-1 flex items-center gap-2">
+                  <Route className="h-4 w-4 text-route" />
+                  本地透明路由与用量统计网关
+                </h3>
                 <p className="text-xs text-fg-2">
                   网关在后台监听本地端口，支持为 Codex、WorkBuddy、OpenCode 实时拦截计算 Prompt 缓存命中率，并在切换供应商时无需重启客户端。
                 </p>
@@ -2092,7 +2215,7 @@ export default function App() {
                     OpenCode 端点: http://127.0.0.1:{dashboard?.proxyPort || 15721}/opencode/v1
                   </div>
                   <div className="rounded-control bg-subtle p-2.5">
-                    自动配置备份目录: ~/.ccswitch-lite/backups
+                    状态: 运行中 (端口 {dashboard?.proxyPort || 15721})
                   </div>
                 </div>
               </div>

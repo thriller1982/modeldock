@@ -46,6 +46,9 @@ declare global {
       }) => Promise<{ skills: UnifiedSkill[]; syncedTargets: TargetId[] }>
       deleteSkill: (skillId: string) => Promise<{ skills: UnifiedSkill[] }>
       openSkillsFolder: () => Promise<string>
+      getAutoLaunch: () => Promise<{ enabled: boolean; isPackaged: boolean }>
+      setAutoLaunch: (payload: { enabled: boolean }) => Promise<AppDatabase>
+      openBackupsFolder: () => Promise<void>
     }
   }
 }
@@ -101,5 +104,8 @@ export const clientApi = {
   }) => callApi<{ skills: UnifiedSkill[]; syncedTargets: TargetId[] }>('saveSkill', payload),
   deleteSkill: (skillId: string) =>
     callApi<{ skills: UnifiedSkill[] }>('deleteSkill', { skillId }),
-  openSkillsFolder: () => callApi<string>('openSkillsFolder')
+  openSkillsFolder: () => callApi<string>('openSkillsFolder'),
+  getAutoLaunch: () => callApi<{ enabled: boolean; isPackaged: boolean }>('getAutoLaunch'),
+  setAutoLaunch: (enabled: boolean) => callApi<AppDatabase>('setAutoLaunch', { enabled }),
+  openBackupsFolder: () => callApi<void>('openBackupsFolder')
 }

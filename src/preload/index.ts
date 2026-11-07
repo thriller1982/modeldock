@@ -21,7 +21,10 @@ const api = {
   getSkillContent: (skillId: string) => ipcRenderer.invoke('ccswitch:getSkillContent', skillId),
   saveSkill: (payload: any) => ipcRenderer.invoke('ccswitch:saveSkill', payload),
   deleteSkill: (skillId: string) => ipcRenderer.invoke('ccswitch:deleteSkill', skillId),
-  openSkillsFolder: () => ipcRenderer.invoke('ccswitch:openSkillsFolder')
+  openSkillsFolder: () => ipcRenderer.invoke('ccswitch:openSkillsFolder'),
+  getAutoLaunch: () => ipcRenderer.invoke('ccswitch:getAutoLaunch'),
+  setAutoLaunch: (enabled: boolean) => ipcRenderer.invoke('ccswitch:setAutoLaunch', { enabled }),
+  openBackupsFolder: () => ipcRenderer.invoke('ccswitch:openBackupsFolder')
 }
 
 if (process.contextIsolated) {

@@ -69,6 +69,34 @@ function registerIpcHandlers(): void {
   ipcMain.handle('ccswitch:openSkillsFolder', () =>
     shell.openPath(coreController.getSkillsHubPath())
   )
+  ipcMain.handle('ccswitch:getAutoLaunch', () => {
+    const store = coreController.getStore()
+    let openAtLogin = false
+    try {
+      openAtLogin = app.getLoginItemSettings().openAtLogin
+    } catch {
+      // ignore
+    }
+    return {
+      enabled: store.autoLaunch !== undefined ? store.autoLaunch : openAtLogin,
+      isPackaged: app.isPackaged
+    }
+  })
+  ipcMain.handle('ccswitch:setAutoLaunch', (_e, { enabled }) => {
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: !!enabled,
+        path: process.execPath,
+        args: app.isPackaged ? [] : [app.getAppPath()]
+      })
+    } catch (err) {
+      console.error('Failed to setLoginItemSettings:', err)
+    }
+    return coreController.setAutoLaunch(!!enabled)
+  })
+  ipcMain.handle('ccswitch:openBackupsFolder', () =>
+    shell.openPath(coreController.getBackupsPath())
+  )
 }
 
 app.whenReady().then(async () => {

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { registry } from './adapters'
-import { loadStore, saveStore, AppDatabase, DEFAULT_SKILLS_HUB } from './store/app-store'
+import { loadStore, saveStore, AppDatabase, DEFAULT_SKILLS_HUB, BACKUP_DIR } from './store/app-store'
 import { usageProxy } from './proxy/usage-proxy'
 import {
   DashboardSnapshot,
@@ -535,6 +535,21 @@ ${fullContent}
     saveStore(store)
 
     return { skills: this.getSkills().skills }
+  }
+
+  getStore(): AppDatabase {
+    return loadStore()
+  }
+
+  getBackupsPath(): string {
+    return BACKUP_DIR
+  }
+
+  setAutoLaunch(enabled: boolean): AppDatabase {
+    const store = loadStore()
+    store.autoLaunch = enabled
+    saveStore(store)
+    return store
   }
 }
 
