@@ -107,7 +107,11 @@ export class CoreController {
     let totalOutputTokens = 0
     let totalReasoningTokens = 0
     let totalSessions = 0
+    let totalCostUsd = 0
+    let totalSavingsUsd = 0
     const allStream: SessionUsageItem[] = []
+
+    const dailyMap = new Map<string, any>()
 
     for (const t of byTarget) {
       totalInputTokens += t.inputTokens
@@ -115,10 +119,34 @@ export class CoreController {
       totalOutputTokens += t.outputTokens
       totalReasoningTokens += t.reasoningTokens
       totalSessions += t.sessionCount
+      totalCostUsd += t.totalCostUsd || 0
+      totalSavingsUsd += t.totalCacheSavingsUsd || 0
       allStream.push(...t.recentSessions)
+
+      for (const d of t.dailyActivities || []) {
+        const existing = dailyMap.get(d.date)
+        if (existing) {
+          existing.totalTokens += d.totalTokens
+          existing.inputTokens += d.inputTokens
+          existing.cachedTokens += d.cachedTokens
+          existing.outputTokens += d.outputTokens
+          existing.reasoningTokens += d.reasoningTokens
+          existing.sessionCount += d.sessionCount
+          existing.costUsd = Number((existing.costUsd + (d.costUsd || 0)).toFixed(4))
+          existing.cacheSavingsUsd = Number(
+            (existing.cacheSavingsUsd + (d.cacheSavingsUsd || 0)).toFixed(4)
+          )
+        } else {
+          dailyMap.set(d.date, { ...d })
+        }
+      }
     }
 
     allStream.sort((a, b) => b.updatedAt - a.updatedAt)
+
+    const allDailyActivities = Array.from(dailyMap.values()).sort((a, b) =>
+      a.date.localeCompare(b.date)
+    )
 
     const overallCacheHitRate =
       totalInputTokens > 0
@@ -132,6 +160,9 @@ export class CoreController {
       totalReasoningTokens,
       overallCacheHitRate,
       totalSessions,
+      totalCostUsd: Number(totalCostUsd.toFixed(2)),
+      totalSavingsUsd: Number(totalSavingsUsd.toFixed(2)),
+      allDailyActivities,
       proxyRunning: usageProxy.isRunning(),
       proxyPort: usageProxy.getPort(),
       byTarget,

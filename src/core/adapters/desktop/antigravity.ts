@@ -4,6 +4,7 @@ import os from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { DesktopTargetAdapter } from '../base'
 import {
+  DailyActivityItem,
   ProviderProfile,
   SessionUsageItem,
   TargetId,
@@ -12,6 +13,7 @@ import {
   UnifiedMcpServer,
   UnifiedSkill
 } from '../../types'
+import { calculateCost } from '../../pricing'
 
 export class AntigravityAdapter extends DesktopTargetAdapter {
   readonly id: TargetId = 'antigravity'
@@ -108,6 +110,7 @@ export class AntigravityAdapter extends DesktopTargetAdapter {
     let outputTokens = 0
     let reasoningTokens = 0
     let totalTokens = 0
+    let dailyActivities: DailyActivityItem[] = []
 
     if (fs.existsSync(this.summariesDbPath)) {
       try {
@@ -206,6 +209,14 @@ export class AntigravityAdapter extends DesktopTargetAdapter {
                 ? Number(((genTokens / sDurationMs) * 1000).toFixed(1))
                 : undefined
 
+            const { costUsd, savingsUsd } = calculateCost(
+              'Gemini 4 Argon',
+              estInput,
+              estCached,
+              estOutput,
+              estReasoning
+            )
+
             recentSessions.push({
               id: convId,
               targetId: this.id,
@@ -223,11 +234,57 @@ export class AntigravityAdapter extends DesktopTargetAdapter {
               cacheHitRate: hitRate,
               outputTokensPerSec,
               durationMs: lastTurnDurMs > 0 ? lastTurnDurMs : undefined,
+              costUsd,
+              cacheSavingsUsd: savingsUsd,
               updatedAt: new Date(r.last_modified_time || Date.now()).getTime(),
               source: 'native-log',
               estimated: true
             })
           }
+        }
+
+        // Daily activity aggregation
+        try {
+          const dailyRows = db
+            .prepare(
+              `SELECT substr(last_modified_time, 1, 10) as day,
+                      COUNT(*) as sessionCount,
+                      SUM(step_count) as totalSteps
+               FROM conversation_summaries
+               WHERE step_count > 0 AND length(last_modified_time) >= 10
+               GROUP BY day
+               ORDER BY day ASC`
+            )
+            .all() as any[]
+
+          dailyActivities = dailyRows.map((dr) => {
+            const steps = Number(dr.totalSteps || 0)
+            const inTok = steps * 6400
+            const cacheTok = Math.floor(inTok * 0.82)
+            const outTok = steps * 380
+            const reasonTok = steps * 210
+            const tot = inTok + outTok + reasonTok
+            const { costUsd, savingsUsd } = calculateCost(
+              'Gemini 4 Argon',
+              inTok,
+              cacheTok,
+              outTok,
+              reasonTok
+            )
+            return {
+              date: String(dr.day),
+              totalTokens: tot,
+              inputTokens: inTok,
+              cachedTokens: cacheTok,
+              outputTokens: outTok,
+              reasoningTokens: reasonTok,
+              sessionCount: Number(dr.sessionCount || 0),
+              costUsd,
+              cacheSavingsUsd: savingsUsd
+            }
+          })
+        } catch {
+          // ignore
         }
       } catch {
         // ignore
@@ -247,6 +304,13 @@ export class AntigravityAdapter extends DesktopTargetAdapter {
           )
         : undefined
 
+    const totalCostUsd = Number(
+      recentSessions.reduce((acc, s) => acc + (s.costUsd || 0), 0).toFixed(2)
+    )
+    const totalCacheSavingsUsd = Number(
+      recentSessions.reduce((acc, s) => acc + (s.cacheSavingsUsd || 0), 0).toFixed(2)
+    )
+
     return {
       targetId: this.id,
       targetName: this.name,
@@ -262,6 +326,9 @@ export class AntigravityAdapter extends DesktopTargetAdapter {
       latestOutputTokensPerSec: latestWithSpeed?.outputTokensPerSec,
       latestDurationMs: latestWithSpeed?.durationMs,
       avgOutputTokensPerSec,
+      totalCostUsd,
+      totalCacheSavingsUsd,
+      dailyActivities,
       recentSessions,
       estimated: true
     }

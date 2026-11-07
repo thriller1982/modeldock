@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
   Activity,
+  Calendar,
   ChartColumn,
   Check,
   ChevronsLeft,
   ChevronsRight,
   Copy,
   Database,
+  DollarSign,
   ExternalLink,
   FileCode,
   FileText,
@@ -36,11 +38,15 @@ import {
 } from 'lucide-react'
 import { clientApi } from './api'
 import type {
+  DailyActivityItem,
   DashboardSnapshot,
   ProviderProfile,
+  SessionUsageItem,
   SwitchMode,
+  TargetCategory,
   TargetId,
   TargetStatus,
+  TargetUsageSummary,
   UnifiedMcpServer,
   UnifiedSkill
 } from '../../core/types'
@@ -50,6 +56,7 @@ type MainView = 'app' | 'mcp' | 'skills' | 'sessions' | 'usage' | 'apps' | 'sett
 
 function formatTokens(n: number): string {
   if (!n || n <= 0) return '0'
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(n)
@@ -112,6 +119,398 @@ function ProviderBadge({ name }: { name: string }) {
   return (
     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] border border-border bg-subtle font-mono text-xs font-bold text-fg-1">
       {ch}
+    </div>
+  )
+}
+
+interface TokenActivityHeatmapProps {
+  activities?: DailyActivityItem[]
+  title?: string
+  targetName?: string
+  totalCostUsd?: number
+  totalSavingsUsd?: number
+}
+
+function TokenActivityHeatmap({
+  activities = [],
+  title = 'Token 活动',
+  targetName = '全部',
+  totalCostUsd,
+  totalSavingsUsd
+}: TokenActivityHeatmapProps) {
+  const [mode, setMode] = useState<'daily' | 'weekly' | 'cumulative'>('daily')
+  const [tooltip, setTooltip] = useState<{
+    x: number
+    y: number
+    date: string
+    tokens: number
+    inTok: number
+    outTok: number
+    cachedTok: number
+    costUsd: number
+    savingsUsd: number
+    sessionCount: number
+  } | null>(null)
+
+  const activityMap = React.useMemo(() => {
+    const map = new Map<string, DailyActivityItem>()
+    for (const a of activities) {
+      map.set(a.date, a)
+    }
+    return map
+  }, [activities])
+
+  const { weeks, monthLabels, stats } = React.useMemo(() => {
+    const today = new Date()
+    const end = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+    const totalDays = 52 * 7
+    const start = new Date(end.getTime() - (totalDays - 1) * 86400000)
+
+    const wList: {
+      weekIdx: number
+      days: {
+        dateStr: string
+        dayOfWeek: number
+        tokens: number
+        data?: DailyActivityItem
+        level: number
+      }[]
+    }[] = []
+
+    let maxTokens = 0
+    let totalTok = 0
+    let totalCost = 0
+    let totalSav = 0
+    let activeDays = 0
+
+    const monthCols: { col: number; label: string }[] = []
+    let lastMonth = -1
+
+    for (let w = 0; w < 52; w++) {
+      const daysInWeek: {
+        dateStr: string
+        dayOfWeek: number
+        tokens: number
+        data?: DailyActivityItem
+        level: number
+      }[] = []
+
+      for (let d = 0; d < 7; d++) {
+        const curDate = new Date(start.getTime() + (w * 7 + d) * 86400000)
+        const dateStr = curDate.toISOString().slice(0, 10)
+        const item = activityMap.get(dateStr)
+        const tokens = item?.totalTokens || 0
+        if (tokens > maxTokens) maxTokens = tokens
+        if (tokens > 0) {
+          activeDays++
+          totalTok += tokens
+          totalCost += item?.costUsd || 0
+          totalSav += item?.cacheSavingsUsd || 0
+        }
+
+        let level = 0
+        if (tokens > 0) {
+          if (tokens < 200_000) level = 1
+          else if (tokens < 2_000_000) level = 2
+          else if (tokens < 20_000_000) level = 3
+          else level = 4
+        }
+
+        daysInWeek.push({
+          dateStr,
+          dayOfWeek: d,
+          tokens,
+          data: item,
+          level
+        })
+
+        const m = curDate.getMonth()
+        if (m !== lastMonth && d === 0) {
+          monthCols.push({ col: w, label: `${m + 1}月` })
+          lastMonth = m
+        }
+      }
+
+      wList.push({ weekIdx: w, days: daysInWeek })
+    }
+
+    return {
+      weeks: wList,
+      monthLabels: monthCols,
+      stats: {
+        maxTokens,
+        totalTok,
+        totalCost,
+        totalSav,
+        activeDays,
+        avgDailyTok: activeDays > 0 ? Math.round(totalTok / activeDays) : 0
+      }
+    }
+  }, [activityMap])
+
+  const getLevelClass = (level: number) => {
+    switch (level) {
+      case 1:
+        return 'bg-blue-200 dark:bg-blue-400/80 hover:ring-2 hover:ring-blue-400'
+      case 2:
+        return 'bg-blue-400 dark:bg-blue-500 hover:ring-2 hover:ring-blue-500'
+      case 3:
+        return 'bg-blue-600 dark:bg-blue-600 hover:ring-2 hover:ring-blue-400'
+      case 4:
+        return 'bg-blue-800 dark:bg-blue-700 hover:ring-2 hover:ring-blue-300'
+      default:
+        return 'bg-subtle/80 dark:bg-white/[0.06] hover:bg-subtle'
+    }
+  }
+
+  const weeklyData = React.useMemo(() => {
+    return weeks.map((w, idx) => {
+      const weekTok = w.days.reduce((sum, d) => sum + d.tokens, 0)
+      const weekCost = w.days.reduce((sum, d) => sum + (d.data?.costUsd || 0), 0)
+      const startDay = w.days[0].dateStr
+      const endDay = w.days[6].dateStr
+      return { weekIdx: idx, weekTok, weekCost, startDay, endDay }
+    })
+  }, [weeks])
+
+  const cumulativeData = React.useMemo(() => {
+    let runningTokens = 0
+    let runningCost = 0
+    return weeks.map((w, idx) => {
+      const weekTok = w.days.reduce((sum, d) => sum + d.tokens, 0)
+      const weekCost = w.days.reduce((sum, d) => sum + (d.data?.costUsd || 0), 0)
+      runningTokens += weekTok
+      runningCost += weekCost
+      return {
+        weekIdx: idx,
+        runningTokens,
+        runningCost,
+        date: w.days[6].dateStr
+      }
+    })
+  }, [weeks])
+
+  const maxWeeklyTok = Math.max(1, ...weeklyData.map((w) => w.weekTok))
+  const maxCumulativeTok = Math.max(1, ...cumulativeData.map((c) => c.runningTokens))
+
+  return (
+    <div className="rounded-panel border border-border bg-surface p-4 shadow-v7-sm space-y-3 relative">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Calendar className="h-4 w-4 text-action" />
+          <h3 className="text-[14px] font-semibold text-fg-1">{title}</h3>
+          <span className="rounded-full bg-subtle px-2 py-0.5 text-[11px] font-medium text-fg-3">
+            {targetName}
+          </span>
+        </div>
+        <div className="flex items-center gap-0.5 rounded-control bg-subtle p-0.5 text-xs">
+          {(['daily', 'weekly', 'cumulative'] as const).map((m) => {
+            const labels = { daily: '每天', weekly: '每周', cumulative: '累计总量' }
+            return (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={`rounded-[4px] px-2.5 py-0.5 text-xs transition ${
+                  mode === m
+                    ? 'bg-surface font-medium text-fg-1 shadow-sm'
+                    : 'text-fg-3 hover:text-fg-1'
+                }`}
+              >
+                {labels[m]}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {mode === 'daily' && (
+        <div className="overflow-x-auto pb-1 pt-1">
+          <div className="min-w-[720px] select-none">
+            <div className="flex gap-[3.5px]">
+              {weeks.map((w) => (
+                <div key={w.weekIdx} className="flex flex-col gap-[3.5px]">
+                  {w.days.map((d) => (
+                    <div
+                      key={d.dateStr}
+                      onMouseEnter={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        setTooltip({
+                          x: rect.left + rect.width / 2,
+                          y: rect.top,
+                          date: d.dateStr,
+                          tokens: d.tokens,
+                          inTok: d.data?.inputTokens || 0,
+                          outTok: (d.data?.outputTokens || 0) + (d.data?.reasoningTokens || 0),
+                          cachedTok: d.data?.cachedTokens || 0,
+                          costUsd: d.data?.costUsd || 0,
+                          savingsUsd: d.data?.cacheSavingsUsd || 0,
+                          sessionCount: d.data?.sessionCount || 0
+                        })
+                      }}
+                      onMouseLeave={() => setTooltip(null)}
+                      className={`h-[11px] w-[11px] rounded-[2.5px] transition-colors cursor-pointer ${getLevelClass(
+                        d.level
+                      )}`}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+
+            <div className="relative mt-2 h-4 text-[10px] text-fg-3">
+              {monthLabels.map((ml) => (
+                <span
+                  key={`${ml.col}-${ml.label}`}
+                  className="absolute"
+                  style={{ left: `${(ml.col / 52) * 100}%` }}
+                >
+                  {ml.label}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mode === 'weekly' && (
+        <div className="overflow-x-auto py-2">
+          <div className="min-w-[720px] h-[100px] flex items-end gap-[3.5px]">
+            {weeklyData.map((w) => {
+              const hPct = Math.max(4, Math.round((w.weekTok / maxWeeklyTok) * 100))
+              return (
+                <div
+                  key={w.weekIdx}
+                  className="group relative flex-1 flex flex-col items-center justify-end h-full"
+                >
+                  <div
+                    style={{ height: `${hPct}%` }}
+                    className={`w-full rounded-t-[2.5px] transition-all ${
+                      w.weekTok > 0 ? 'bg-action hover:bg-action-hover' : 'bg-subtle/50'
+                    }`}
+                  />
+                  {w.weekTok > 0 && (
+                    <div className="pointer-events-none absolute bottom-full mb-1.5 hidden group-hover:flex flex-col items-center z-30">
+                      <div className="rounded bg-fg-1 text-app px-2 py-1 text-[10px] whitespace-nowrap shadow-lg">
+                        <div>
+                          {w.startDay} ~ {w.endDay}
+                        </div>
+                        <div className="font-mono font-semibold">
+                          {formatTokens(w.weekTok)} Tokens
+                        </div>
+                        {w.weekCost > 0 && <div>等值额度: ${w.weekCost.toFixed(2)}</div>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex justify-between text-[10px] text-fg-3 mt-1.5">
+            <span>52 周前</span>
+            <span>近期活跃周</span>
+            <span>本周</span>
+          </div>
+        </div>
+      )}
+
+      {mode === 'cumulative' && (
+        <div className="overflow-x-auto py-2">
+          <div className="min-w-[720px] h-[100px] flex items-end gap-[3.5px]">
+            {cumulativeData.map((c) => {
+              const hPct = Math.max(4, Math.round((c.runningTokens / maxCumulativeTok) * 100))
+              return (
+                <div
+                  key={c.weekIdx}
+                  className="group relative flex-1 flex flex-col items-center justify-end h-full"
+                >
+                  <div
+                    style={{ height: `${hPct}%` }}
+                    className="w-full rounded-t-[2px] bg-route-text/80 hover:bg-route-text transition-all"
+                  />
+                  <div className="pointer-events-none absolute bottom-full mb-1.5 hidden group-hover:flex flex-col items-center z-30">
+                    <div className="rounded bg-fg-1 text-app px-2 py-1 text-[10px] whitespace-nowrap shadow-lg">
+                      <div>截止 {c.date}</div>
+                      <div className="font-mono font-semibold">
+                        累计 {formatTokens(c.runningTokens)} Tokens
+                      </div>
+                      <div>累计等值: ${c.runningCost.toFixed(2)}</div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex justify-between text-[10px] text-fg-3 mt-1.5">
+            <span>初始</span>
+            <span>累计增长趋势</span>
+            <span className="font-mono font-semibold text-fg-1">
+              总计 {formatTokens(stats.totalTok)}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {tooltip && (
+        <div
+          className="fixed z-50 -translate-x-1/2 -translate-y-full pointer-events-none rounded-control border border-border bg-fg-1 px-3 py-2 text-xs text-app shadow-v7-lg transition-opacity duration-100"
+          style={{ left: tooltip.x, top: tooltip.y - 8 }}
+        >
+          <div className="font-semibold">{tooltip.date}</div>
+          {tooltip.tokens > 0 ? (
+            <div className="mt-1 space-y-0.5 text-[11px] font-mono">
+              <div className="text-white font-semibold">
+                总用量: {formatTokens(tooltip.tokens)} Tokens
+              </div>
+              <div className="opacity-90">
+                输入: {formatTokens(tooltip.inTok)} (缓存 {formatTokens(tooltip.cachedTok)}) · 输出:{' '}
+                {formatTokens(tooltip.outTok)}
+              </div>
+              <div className="text-emerald-300 font-medium">
+                等值额度: ${tooltip.costUsd.toFixed(3)}
+                {tooltip.savingsUsd > 0
+                  ? ` (缓存为您节省 $${tooltip.savingsUsd.toFixed(3)})`
+                  : ''}
+              </div>
+              {tooltip.sessionCount > 0 && (
+                <div className="opacity-75">共 {tooltip.sessionCount} 次会话调用</div>
+              )}
+            </div>
+          ) : (
+            <div className="mt-0.5 text-[11px] opacity-75">该日无 Token 活动记录</div>
+          )}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between border-t border-border pt-2 text-[11px] text-fg-3">
+        <div className="flex items-center gap-3">
+          <span>
+            活跃天数: <strong className="font-mono text-fg-1">{stats.activeDays}</strong> 天
+          </span>
+          <span>·</span>
+          <span>
+            日均消耗: <strong className="font-mono text-fg-1">{formatTokens(stats.avgDailyTok)}</strong> Tokens
+          </span>
+          <span>·</span>
+          <span>
+            最高单日: <strong className="font-mono text-fg-1">{formatTokens(stats.maxTokens)}</strong> Tokens
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span>
+            官方 API 标价折算:{' '}
+            <strong className="font-mono font-semibold text-action">
+              ${(totalCostUsd !== undefined ? totalCostUsd : stats.totalCost).toFixed(2)}
+            </strong>
+          </span>
+          <span>·</span>
+          <span>
+            Prompt 缓存为您节省:{' '}
+            <strong className="font-mono font-semibold text-route-text">
+              ${(totalSavingsUsd !== undefined ? totalSavingsUsd : stats.totalSav).toFixed(2)}
+            </strong>
+          </span>
+        </div>
+      </div>
     </div>
   )
 }
@@ -728,6 +1127,20 @@ export default function App() {
                         <span className="text-[10px] opacity-75">(估算)</span>
                       )}
                     </div>
+                    {currentSummary.totalCostUsd !== undefined && (
+                      <div className="flex items-center gap-1 rounded-full bg-subtle px-2.5 py-0.5 font-mono text-fg-1">
+                        <DollarSign className="h-3 w-3 text-fg-3" />
+                        <span className="font-semibold">${currentSummary.totalCostUsd.toFixed(2)}</span>
+                        {currentSummary.totalCacheSavingsUsd && currentSummary.totalCacheSavingsUsd > 0 ? (
+                          <span
+                            className="text-[10px] text-route-text"
+                            title={`Prompt 缓存为您节省 $${currentSummary.totalCacheSavingsUsd.toFixed(2)}`}
+                          >
+                            (省 ${currentSummary.totalCacheSavingsUsd.toFixed(2)})
+                          </span>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -909,6 +1322,17 @@ export default function App() {
                   )
                 })}
               </div>
+
+              {/* Dedicated Token Activity Heatmap for this App */}
+              {currentSummary && (
+                <TokenActivityHeatmap
+                  activities={currentSummary.dailyActivities || []}
+                  title={`${APP_SHORT_NAMES[currentTarget.id]} Token 活动`}
+                  targetName={APP_SHORT_NAMES[currentTarget.id]}
+                  totalCostUsd={currentSummary.totalCostUsd}
+                  totalSavingsUsd={currentSummary.totalCacheSavingsUsd}
+                />
+              )}
             </div>
           </>
         )}
@@ -931,35 +1355,35 @@ export default function App() {
             </header>
 
             <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-              {/* Hero Metric Strip */}
-              <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+              {/* Hero Metric Strip (6 Cards with Cost & Savings) */}
+              <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                 <div className="rounded-panel border border-border bg-surface p-4 shadow-v7-sm">
                   <div className="text-xs text-fg-3">总输入 Tokens (含缓存)</div>
-                  <div className="mt-1.5 font-mono text-[24px] font-semibold leading-[32px] text-fg-1">
+                  <div className="mt-1.5 font-mono text-[22px] font-semibold leading-[28px] text-fg-1">
                     {formatTokens(dashboard.totalInputTokens)}
                   </div>
                   <div className="mt-1 text-xs text-fg-3">
-                    未缓存新鲜输入:{' '}
+                    新鲜输入:{' '}
                     {formatTokens(dashboard.totalInputTokens - dashboard.totalCachedTokens)}
                   </div>
                 </div>
 
                 <div className="rounded-panel border border-route-border bg-route-soft p-4">
                   <div className="text-xs font-medium text-route-text">
-                    Prompt 缓存命中 (Cache Read)
+                    Prompt 缓存命中 (Cache)
                   </div>
-                  <div className="mt-1.5 font-mono text-[24px] font-semibold leading-[32px] text-route-text">
+                  <div className="mt-1.5 font-mono text-[22px] font-semibold leading-[28px] text-route-text">
                     {formatTokens(dashboard.totalCachedTokens)}
                   </div>
                   <div className="mt-1 text-xs text-route-text opacity-80">
-                    命中缓存免除重复 Prefill 计算
+                    免除重复 Prefill 计算
                   </div>
                 </div>
 
                 <div className="rounded-panel border border-border bg-surface p-4 shadow-v7-sm">
-                  <div className="text-xs text-fg-3">综合缓存命中率 (Hit Rate)</div>
+                  <div className="text-xs text-fg-3">综合缓存命中率</div>
                   <div className="mt-1.5 flex items-baseline gap-2">
-                    <span className="font-mono text-[24px] font-semibold leading-[32px] text-action">
+                    <span className="font-mono text-[22px] font-semibold leading-[28px] text-action">
                       {dashboard.overallCacheHitRate}%
                     </span>
                     <span className="text-xs text-fg-3">({dashboard.totalSessions} 会话)</span>
@@ -973,8 +1397,8 @@ export default function App() {
                 </div>
 
                 <div className="rounded-panel border border-border bg-surface p-4 shadow-v7-sm">
-                  <div className="text-xs text-fg-3">总输出 / 思考推理 Tokens</div>
-                  <div className="mt-1.5 font-mono text-[24px] font-semibold leading-[32px] text-fg-1">
+                  <div className="text-xs text-fg-3">总输出 / 推理 Tokens</div>
+                  <div className="mt-1.5 font-mono text-[22px] font-semibold leading-[28px] text-fg-1">
                     {formatTokens(dashboard.totalOutputTokens + dashboard.totalReasoningTokens)}
                   </div>
                   <div className="mt-1 text-xs text-fg-3">
@@ -982,7 +1406,39 @@ export default function App() {
                     {formatTokens(dashboard.totalReasoningTokens)}
                   </div>
                 </div>
+
+                <div className="rounded-panel border border-border bg-surface p-4 shadow-v7-sm">
+                  <div className="flex items-center justify-between text-xs text-fg-3">
+                    <span>官方标价等值额度</span>
+                    <DollarSign className="h-3.5 w-3.5 text-action" />
+                  </div>
+                  <div className="mt-1.5 font-mono text-[22px] font-semibold leading-[28px] text-fg-1">
+                    ${dashboard.totalCostUsd !== undefined ? dashboard.totalCostUsd.toFixed(2) : '0.00'}
+                  </div>
+                  <div className="mt-1 text-xs text-fg-3">按各家公开标价折算</div>
+                </div>
+
+                <div className="rounded-panel border border-emerald-500/20 bg-emerald-500/5 p-4">
+                  <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    Prompt 缓存为您节省
+                  </div>
+                  <div className="mt-1.5 font-mono text-[22px] font-semibold leading-[28px] text-emerald-600 dark:text-emerald-400">
+                    省 ${dashboard.totalSavingsUsd !== undefined ? dashboard.totalSavingsUsd.toFixed(2) : '0.00'}
+                  </div>
+                  <div className="mt-1 text-xs text-emerald-700/80 dark:text-emerald-300/80">
+                    缓存大幅降低 API 开销
+                  </div>
+                </div>
               </div>
+
+              {/* Token Activity Heatmap in Overview (Matches User's Reference) */}
+              <TokenActivityHeatmap
+                activities={dashboard.allDailyActivities || []}
+                title="Token 活动 (全平台汇总)"
+                targetName="全部 AI 工具"
+                totalCostUsd={dashboard.totalCostUsd}
+                totalSavingsUsd={dashboard.totalSavingsUsd}
+              />
 
               {/* Per-App Comparison Table (Desktop vs CLI) */}
               <div className="rounded-panel border border-border bg-surface p-4 shadow-v7-sm">
@@ -999,6 +1455,7 @@ export default function App() {
                       <th className="pb-2.5 text-right">缓存命中 Tokens</th>
                       <th className="pb-2.5 text-right">缓存命中率</th>
                       <th className="pb-2.5 text-right">输出 / 推理</th>
+                      <th className="pb-2.5 text-right">等值额度 (USD)</th>
                       <th className="pb-2.5 text-right">最新速度 / 均速</th>
                     </tr>
                   </thead>
@@ -1041,6 +1498,16 @@ export default function App() {
                         </td>
                         <td className="py-3 text-right font-mono text-fg-2">
                           {formatTokens(t.outputTokens)} / {formatTokens(t.reasoningTokens)}
+                        </td>
+                        <td className="py-3 text-right font-mono whitespace-nowrap">
+                          <span className="font-semibold text-fg-1">
+                            ${t.totalCostUsd !== undefined ? t.totalCostUsd.toFixed(2) : '0.00'}
+                          </span>
+                          {t.totalCacheSavingsUsd && t.totalCacheSavingsUsd > 0 ? (
+                            <span className="block text-[10px] text-route-text font-normal">
+                              省 ${t.totalCacheSavingsUsd.toFixed(2)}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="py-3 text-right font-mono">
                           {t.latestOutputTokensPerSec ? (
@@ -1098,7 +1565,28 @@ export default function App() {
               </div>
             </header>
 
-            <div className="flex-1 overflow-y-auto px-6 py-4">
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              {/* Token Activity Heatmap filtered by current target (Matches User's Reference) */}
+              {(() => {
+                const isAll = usageFilter === 'all'
+                const targetSum = dashboard.byTarget.find((b) => b.targetId === usageFilter)
+                const activities = isAll
+                  ? dashboard.allDailyActivities || []
+                  : targetSum?.dailyActivities || []
+                const targetName = isAll ? '全部 AI 工具' : APP_SHORT_NAMES[usageFilter as TargetId] || usageFilter
+                const cost = isAll ? dashboard.totalCostUsd : targetSum?.totalCostUsd
+                const savings = isAll ? dashboard.totalSavingsUsd : targetSum?.totalCacheSavingsUsd
+                return (
+                  <TokenActivityHeatmap
+                    activities={activities}
+                    title={`Token 活动 (${targetName})`}
+                    targetName={targetName}
+                    totalCostUsd={cost}
+                    totalSavingsUsd={savings}
+                  />
+                )
+              })()}
+
               <div className="rounded-panel border border-border bg-surface shadow-v7-sm overflow-hidden">
                 <table className="w-full text-left text-xs">
                   <thead>
@@ -1110,6 +1598,7 @@ export default function App() {
                       <th className="px-4 py-2.5 text-right">缓存命中</th>
                       <th className="px-4 py-2.5 text-right">命中率</th>
                       <th className="px-4 py-2.5 text-right">输出 / 思考</th>
+                      <th className="px-4 py-2.5 text-right">等值额度 (USD)</th>
                       <th className="px-4 py-2.5 text-right">输出速度 / 耗时</th>
                       <th className="px-4 py-2.5 text-right">时间</th>
                     </tr>
@@ -1147,6 +1636,25 @@ export default function App() {
                           </td>
                           <td className="px-4 py-2.5 text-right font-mono text-fg-2 whitespace-nowrap">
                             {formatTokens(item.outputTokens)} / {formatTokens(item.reasoningTokens)}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-mono whitespace-nowrap">
+                            {item.costUsd !== undefined ? (
+                              <div>
+                                <span className="font-semibold text-fg-1">
+                                  ${item.costUsd.toFixed(3)}
+                                </span>
+                                {item.cacheSavingsUsd && item.cacheSavingsUsd > 0 ? (
+                                  <span
+                                    className="block text-[10px] text-route-text font-normal"
+                                    title={`Prompt 缓存为您节省 $${item.cacheSavingsUsd.toFixed(3)}`}
+                                  >
+                                    省 ${item.cacheSavingsUsd.toFixed(3)}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <span className="text-fg-3">-</span>
+                            )}
                           </td>
                           <td className="px-4 py-2.5 text-right font-mono whitespace-nowrap">
                             {item.outputTokensPerSec ? (

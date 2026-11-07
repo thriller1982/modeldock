@@ -7,6 +7,7 @@ import { parse, stringify } from 'smol-toml'
 import { DesktopTargetAdapter } from '../base'
 import { FileParseCache } from '../file-cache'
 import {
+  DailyActivityItem,
   ProviderProfile,
   SessionUsageItem,
   TargetId,
@@ -16,22 +17,26 @@ import {
   UnifiedSkill
 } from '../../types'
 import { createBackup } from '../../store/app-store'
+import { calculateCost } from '../../pricing'
+
+export interface CodexModelTurnUsage {
+  model: string
+  inputTokens: number
+  cachedTokens: number
+  cacheWriteTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  totalTokens: number
+  outputTokensPerSec?: number
+  durationMs?: number
+}
 
 export class CodexDesktopAdapter extends DesktopTargetAdapter {
   readonly id: TargetId = 'codex-desktop'
   readonly name = 'Codex 桌面版 (ChatGPT App)'
   readonly description = 'OpenAI Codex Desktop / ChatGPT 桌面端环境 (~/.codex)'
   readonly processNames = ['Codex.exe', 'ChatGPT.exe', 'codex-computer-use.exe']
-  private rolloutCache = new FileParseCache<{
-    inputTokens: number
-    cachedTokens: number
-    cacheWriteTokens: number
-    outputTokens: number
-    reasoningTokens: number
-    totalTokens: number
-    outputTokensPerSec?: number
-    durationMs?: number
-  } | null>()
+  private rolloutCache = new FileParseCache<CodexModelTurnUsage[] | null>()
 
   private get codexDir(): string {
     return path.join(os.homedir(), '.codex')
@@ -118,36 +123,33 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
     }
   }
 
-  private parseRolloutJsonlUsage(rolloutPath: string): {
-    inputTokens: number
-    cachedTokens: number
-    cacheWriteTokens: number
-    outputTokens: number
-    reasoningTokens: number
-    totalTokens: number
-    outputTokensPerSec?: number
-    durationMs?: number
-  } | null {
+  private parseRolloutJsonlUsage(
+    rolloutPath: string,
+    fallbackModel = 'gpt-6.1-sol'
+  ): CodexModelTurnUsage[] | null {
     try {
       const cleanPath = rolloutPath.replace(/^\\\\\?\\/, '')
       return this.rolloutCache.get(cleanPath, (content) => {
         const lines = content.split('\n')
-        let result: {
-          inputTokens: number
-          cachedTokens: number
-          cacheWriteTokens: number
-          outputTokens: number
-          reasoningTokens: number
-          totalTokens: number
-          outputTokensPerSec?: number
-          durationMs?: number
-        } | null = null
+        const byModel = new Map<
+          string,
+          {
+            model: string
+            inputTokens: number
+            cachedTokens: number
+            cacheWriteTokens: number
+            outputTokens: number
+            reasoningTokens: number
+            totalTokens: number
+            activeGenMs: number
+            genOutputSum: number
+            lastTurnDurMs: number
+            lastTurnTok: number
+          }
+        >()
 
+        let currentModel = fallbackModel
         let reqStartTs = 0
-        let activeGenMs = 0
-        let genOutputSum = 0
-        let lastTurnDurMs = 0
-        let lastTurnTok = 0
 
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i].trim()
@@ -157,6 +159,12 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
             const ts = obj.timestamp ? new Date(obj.timestamp).getTime() : 0
             const pType = obj.payload?.type
             const pRole = obj.payload?.role
+
+            if (obj.payload?.thread_settings?.model) {
+              currentModel = String(obj.payload.thread_settings.model)
+            } else if (obj.payload?.model) {
+              currentModel = String(obj.payload.model)
+            }
 
             // LLM generation starts right after user message or tool output is appended
             if (
@@ -170,42 +178,43 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
               reqStartTs = ts
             } else if (obj.type === 'token_usage_record' && obj.payload?.usage) {
               const u = obj.payload.usage
-              // In Codex rollout logs, u.output_tokens ALREADY includes reasoning_output_tokens
               const stepOut = Number(u.output_tokens || 0)
+              let dur = 0
               if (reqStartTs > 0 && ts > reqStartTs) {
-                const dur = ts - reqStartTs
-                if (dur >= 300 && dur < 180_000 && stepOut > 0) {
-                  activeGenMs += dur
-                  genOutputSum += stepOut
-                  lastTurnDurMs = dur
-                  lastTurnTok = stepOut
-                }
+                dur = ts - reqStartTs
               }
               reqStartTs = 0
-              if (obj.payload.thread_token_usage) {
-                const tu = obj.payload.thread_token_usage
-                result = {
-                  inputTokens: tu.input_tokens || 0,
-                  cachedTokens: tu.cached_input_tokens || 0,
-                  cacheWriteTokens: tu.cache_write_input_tokens || 0,
-                  outputTokens: tu.output_tokens || 0,
-                  reasoningTokens: tu.reasoning_output_tokens || 0,
-                  totalTokens: tu.total_tokens || 0
+
+              let b = byModel.get(currentModel)
+              if (!b) {
+                b = {
+                  model: currentModel,
+                  inputTokens: 0,
+                  cachedTokens: 0,
+                  cacheWriteTokens: 0,
+                  outputTokens: 0,
+                  reasoningTokens: 0,
+                  totalTokens: 0,
+                  activeGenMs: 0,
+                  genOutputSum: 0,
+                  lastTurnDurMs: 0,
+                  lastTurnTok: 0
                 }
+                byModel.set(currentModel, b)
               }
-            } else if (
-              obj.type === 'event_msg' &&
-              obj.payload?.type === 'token_count' &&
-              obj.payload.info?.total_token_usage
-            ) {
-              const u = obj.payload.info.total_token_usage
-              result = {
-                inputTokens: u.input_tokens || 0,
-                cachedTokens: u.cached_input_tokens || 0,
-                cacheWriteTokens: u.cache_write_input_tokens || 0,
-                outputTokens: u.output_tokens || 0,
-                reasoningTokens: u.reasoning_output_tokens || 0,
-                totalTokens: u.total_tokens || 0
+
+              b.inputTokens += Number(u.input_tokens || 0)
+              b.cachedTokens += Number(u.cached_input_tokens || 0)
+              b.cacheWriteTokens += Number(u.cache_write_input_tokens || 0)
+              b.outputTokens += stepOut
+              b.reasoningTokens += Number(u.reasoning_output_tokens || 0)
+              b.totalTokens += Number(u.total_tokens || 0)
+
+              if (dur >= 300 && dur < 180_000 && stepOut > 0) {
+                b.activeGenMs += dur
+                b.genOutputSum += stepOut
+                b.lastTurnDurMs = dur
+                b.lastTurnTok = stepOut
               }
             }
           } catch {
@@ -213,14 +222,31 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
           }
         }
 
-        if (result && activeGenMs > 300 && genOutputSum > 0) {
-          result.durationMs = lastTurnDurMs > 0 ? lastTurnDurMs : activeGenMs
-          result.outputTokensPerSec =
-            lastTurnDurMs > 300 && lastTurnTok > 0
-              ? Number(((lastTurnTok / lastTurnDurMs) * 1000).toFixed(1))
-              : Number(((genOutputSum / activeGenMs) * 1000).toFixed(1))
+        if (byModel.size === 0) return null
+
+        const results: CodexModelTurnUsage[] = []
+        for (const [m, b] of byModel.entries()) {
+          const speed =
+            b.lastTurnDurMs > 300 && b.lastTurnTok > 0
+              ? Number(((b.lastTurnTok / b.lastTurnDurMs) * 1000).toFixed(1))
+              : b.activeGenMs > 300 && b.genOutputSum > 0
+              ? Number(((b.genOutputSum / b.activeGenMs) * 1000).toFixed(1))
+              : undefined
+
+          results.push({
+            model: m,
+            inputTokens: b.inputTokens,
+            cachedTokens: b.cachedTokens,
+            cacheWriteTokens: b.cacheWriteTokens,
+            outputTokens: b.outputTokens,
+            reasoningTokens: b.reasoningTokens,
+            totalTokens: b.totalTokens,
+            outputTokensPerSec: speed,
+            durationMs: b.lastTurnDurMs > 0 ? b.lastTurnDurMs : b.activeGenMs || undefined
+          })
         }
-        return result
+
+        return results
       })
     } catch {
       return null
@@ -235,6 +261,7 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
     let outputTokens = 0
     let reasoningTokens = 0
     let totalTokens = 0
+    let dailyActivities: DailyActivityItem[] = []
 
     if (fs.existsSync(this.stateSqlitePath)) {
       try {
@@ -248,53 +275,151 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
              LIMIT ?`
           )
           .all(limit) as any[]
+
+        // Historical daily activity aggregation
+        try {
+          const dailyRows = db
+            .prepare(
+              `SELECT strftime('%Y-%m-%d', datetime(updated_at, 'unixepoch', 'localtime')) as day,
+                      COUNT(*) as sessionCount,
+                      SUM(tokens_used) as totalTokens
+               FROM threads
+               WHERE tokens_used > 0
+               GROUP BY day
+               ORDER BY day ASC`
+            )
+            .all() as any[]
+
+          dailyActivities = dailyRows.map((dr) => {
+            const tot = Number(dr.totalTokens || 0)
+            const inTok = Math.round(tot * 0.92)
+            const cacheTok = Math.round(inTok * 0.88)
+            const outTok = Math.round(tot * 0.08)
+            const { costUsd, savingsUsd } = calculateCost('gpt-6.1-sol', inTok, cacheTok, outTok, 0)
+            return {
+              date: String(dr.day),
+              totalTokens: tot,
+              inputTokens: inTok,
+              cachedTokens: cacheTok,
+              outputTokens: outTok,
+              reasoningTokens: 0,
+              sessionCount: Number(dr.sessionCount || 0),
+              costUsd,
+              cacheSavingsUsd: savingsUsd
+            }
+          })
+        } catch {
+          // ignore
+        }
+
         db.close()
 
         for (const r of rows) {
-          const detail = this.parseRolloutJsonlUsage(r.rollout_path)
-          const sInput = detail ? detail.inputTokens : Number(r.tokens_used || 0)
-          const sCached = detail ? detail.cachedTokens : 0
-          const sCacheWrite = detail ? detail.cacheWriteTokens : 0
-          const sOutput = detail ? detail.outputTokens : 0
-          const sReasoning = detail ? detail.reasoningTokens : 0
-          const sTotal = detail ? detail.totalTokens : Number(r.tokens_used || 0)
+          const detailList = this.parseRolloutJsonlUsage(r.rollout_path, r.model || 'gpt-6.1-sol')
 
-          inputTokens += sInput
-          cachedTokens += sCached
-          cacheWriteTokens += sCacheWrite
-          outputTokens += sOutput
-          reasoningTokens += sReasoning
-          totalTokens += sTotal
+          if (detailList && detailList.length > 1) {
+            // Multi-model session split into distinct entries
+            for (const b of detailList) {
+              if (b.totalTokens <= 0) continue
+              inputTokens += b.inputTokens
+              cachedTokens += b.cachedTokens
+              cacheWriteTokens += b.cacheWriteTokens
+              outputTokens += b.outputTokens
+              reasoningTokens += b.reasoningTokens
+              totalTokens += b.totalTokens
 
-          const hitRate = sInput > 0 ? Number(((sCached / sInput) * 100).toFixed(1)) : 0
+              const hitRate =
+                b.inputTokens > 0 ? Number(((b.cachedTokens / b.inputTokens) * 100).toFixed(1)) : 0
+              const { costUsd, savingsUsd } = calculateCost(
+                b.model,
+                b.inputTokens,
+                b.cachedTokens,
+                b.outputTokens,
+                b.reasoningTokens
+              )
 
-          recentSessions.push({
-            id: r.id,
-            targetId: this.id,
-            targetName: this.name,
-            category: this.category,
-            title: r.title || 'Codex Session',
-            model: r.model || 'gpt-codex',
-            provider: r.model_provider || 'openai',
-            inputTokens: sInput,
-            cachedTokens: sCached,
-            cacheWriteTokens: sCacheWrite,
-            outputTokens: sOutput,
-            reasoningTokens: sReasoning,
-            totalTokens: sTotal,
-            cacheHitRate: hitRate,
-            outputTokensPerSec: detail?.outputTokensPerSec,
-            durationMs: detail?.durationMs,
-            updatedAt: r.updated_at_ms || r.updated_at * 1000,
-            source: 'native-log'
-          })
+              recentSessions.push({
+                id: `${r.id}_${b.model}`,
+                targetId: this.id,
+                targetName: this.name,
+                category: this.category,
+                title: `${r.title || 'Codex Session'} (${b.model})`,
+                model: b.model,
+                provider: r.model_provider || 'openai',
+                inputTokens: b.inputTokens,
+                cachedTokens: b.cachedTokens,
+                cacheWriteTokens: b.cacheWriteTokens,
+                outputTokens: b.outputTokens,
+                reasoningTokens: b.reasoningTokens,
+                totalTokens: b.totalTokens,
+                cacheHitRate: hitRate,
+                outputTokensPerSec: b.outputTokensPerSec,
+                durationMs: b.durationMs,
+                costUsd,
+                cacheSavingsUsd: savingsUsd,
+                updatedAt: r.updated_at_ms || r.updated_at * 1000,
+                source: 'native-log'
+              })
+            }
+          } else {
+            // Single model session
+            const detail = detailList?.[0]
+            const sModel = detail?.model || r.model || 'gpt-codex'
+            const sInput = detail ? detail.inputTokens : Number(r.tokens_used || 0)
+            const sCached = detail ? detail.cachedTokens : 0
+            const sCacheWrite = detail ? detail.cacheWriteTokens : 0
+            const sOutput = detail ? detail.outputTokens : 0
+            const sReasoning = detail ? detail.reasoningTokens : 0
+            const sTotal = detail ? detail.totalTokens : Number(r.tokens_used || 0)
+
+            inputTokens += sInput
+            cachedTokens += sCached
+            cacheWriteTokens += sCacheWrite
+            outputTokens += sOutput
+            reasoningTokens += sReasoning
+            totalTokens += sTotal
+
+            const hitRate = sInput > 0 ? Number(((sCached / sInput) * 100).toFixed(1)) : 0
+            const { costUsd, savingsUsd } = calculateCost(
+              sModel,
+              sInput,
+              sCached,
+              sOutput,
+              sReasoning
+            )
+
+            recentSessions.push({
+              id: r.id,
+              targetId: this.id,
+              targetName: this.name,
+              category: this.category,
+              title: r.title || 'Codex Session',
+              model: sModel,
+              provider: r.model_provider || 'openai',
+              inputTokens: sInput,
+              cachedTokens: sCached,
+              cacheWriteTokens: sCacheWrite,
+              outputTokens: sOutput,
+              reasoningTokens: sReasoning,
+              totalTokens: sTotal,
+              cacheHitRate: hitRate,
+              outputTokensPerSec: detail?.outputTokensPerSec,
+              durationMs: detail?.durationMs,
+              costUsd,
+              cacheSavingsUsd: savingsUsd,
+              updatedAt: r.updated_at_ms || r.updated_at * 1000,
+              source: 'native-log'
+            })
+          }
         }
       } catch {
         // ignore sqlite lock/read error
       }
     }
 
-    const cacheHitRate = inputTokens > 0 ? Number(((cachedTokens / inputTokens) * 100).toFixed(1)) : 0
+    const cacheHitRate =
+      inputTokens > 0 ? Number(((cachedTokens / inputTokens) * 100).toFixed(1)) : 0
+
     const withSpeed = recentSessions.filter((s) => s.outputTokensPerSec && s.outputTokensPerSec > 0)
     const latestWithSpeed = withSpeed[0]
     const avgOutputTokensPerSec =
@@ -305,6 +430,13 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
             ).toFixed(1)
           )
         : undefined
+
+    const totalCostUsd = Number(
+      recentSessions.reduce((acc, s) => acc + (s.costUsd || 0), 0).toFixed(2)
+    )
+    const totalCacheSavingsUsd = Number(
+      recentSessions.reduce((acc, s) => acc + (s.cacheSavingsUsd || 0), 0).toFixed(2)
+    )
 
     return {
       targetId: this.id,
@@ -321,6 +453,9 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
       latestOutputTokensPerSec: latestWithSpeed?.outputTokensPerSec,
       latestDurationMs: latestWithSpeed?.durationMs,
       avgOutputTokensPerSec,
+      totalCostUsd,
+      totalCacheSavingsUsd,
+      dailyActivities,
       recentSessions
     }
   }

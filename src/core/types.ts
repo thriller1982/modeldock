@@ -37,6 +37,18 @@ export interface UnifiedSkill {
   updatedAt?: number
 }
 
+export interface DailyActivityItem {
+  date: string // "YYYY-MM-DD"
+  totalTokens: number
+  inputTokens: number
+  cachedTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  sessionCount: number
+  costUsd: number
+  cacheSavingsUsd: number
+}
+
 export interface SessionUsageItem {
   id: string
   targetId: TargetId
@@ -56,6 +68,10 @@ export interface SessionUsageItem {
   outputTokensPerSec?: number
   /** Active generation duration in milliseconds */
   durationMs?: number
+  /** Estimated cost in USD based on official model pricing */
+  costUsd?: number
+  /** Estimated cost saved by prompt caching in USD */
+  cacheSavingsUsd?: number
   updatedAt: number
   source: 'native-log' | 'local-proxy'
   /** true when token numbers are estimated (e.g. from transcript length) rather than reported by the API */
@@ -80,6 +96,12 @@ export interface TargetUsageSummary {
   latestDurationMs?: number
   /** Average output speed across recent sessions (tok/s) */
   avgOutputTokensPerSec?: number
+  /** Total estimated cost in USD */
+  totalCostUsd?: number
+  /** Total savings from prompt caching in USD */
+  totalCacheSavingsUsd?: number
+  /** Daily activity aggregation for heatmap/calendar */
+  dailyActivities?: DailyActivityItem[]
   recentSessions: SessionUsageItem[]
   estimated?: boolean
 }
@@ -122,6 +144,12 @@ export interface DashboardSnapshot {
   totalReasoningTokens: number
   overallCacheHitRate: number
   totalSessions: number
+  /** Total estimated cost in USD across all targets */
+  totalCostUsd?: number
+  /** Total cache savings in USD across all targets */
+  totalSavingsUsd?: number
+  /** Daily activity aggregation across all AI tools combined */
+  allDailyActivities?: DailyActivityItem[]
   proxyRunning: boolean
   proxyPort: number
   byTarget: TargetUsageSummary[]

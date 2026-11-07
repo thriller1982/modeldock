@@ -4,6 +4,7 @@ import os from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { DesktopTargetAdapter } from '../base'
 import {
+  DailyActivityItem,
   ProviderProfile,
   SessionUsageItem,
   TargetId,
@@ -13,6 +14,7 @@ import {
   UnifiedSkill
 } from '../../types'
 import { createBackup } from '../../store/app-store'
+import { calculateCost } from '../../pricing'
 
 export class WorkBuddyAdapter extends DesktopTargetAdapter {
   readonly id: TargetId = 'workbuddy'
@@ -284,6 +286,14 @@ export class WorkBuddyAdapter extends DesktopTargetAdapter {
                   ? Number(((b.genTokSum / b.sDurationMs) * 1000).toFixed(1))
                   : undefined
 
+              const { costUsd, savingsUsd } = calculateCost(
+                modelName,
+                b.sInput,
+                b.sCached,
+                b.sOutput,
+                b.sReasoning
+              )
+
               recentSessions.push({
                 id: multiModel ? `${sid}_${modelName}` : sid,
                 targetId: this.id,
@@ -301,6 +311,8 @@ export class WorkBuddyAdapter extends DesktopTargetAdapter {
                 cacheHitRate: hitRate,
                 outputTokensPerSec,
                 durationMs: b.lastTurnDurMs > 0 ? b.lastTurnDurMs : undefined,
+                costUsd,
+                cacheSavingsUsd: savingsUsd,
                 updatedAt: b.updatedAt,
                 source: 'native-log'
               })
@@ -316,6 +328,47 @@ export class WorkBuddyAdapter extends DesktopTargetAdapter {
 
     recentSessions.sort((a, b) => b.updatedAt - a.updatedAt)
 
+    // Daily activity aggregation from workbuddy.db
+    let dailyActivities: DailyActivityItem[] = []
+    if (fs.existsSync(wbDbPath)) {
+      try {
+        const db = new DatabaseSync(wbDbPath, { open: true, readOnly: true })
+        const dailyRows = db
+          .prepare(
+            `SELECT strftime('%Y-%m-%d', datetime(updated_at / 1000, 'unixepoch', 'localtime')) as day,
+                    COUNT(*) as sessionCount,
+                    SUM(used) as totalTokens
+             FROM session_usage
+             WHERE used > 0
+             GROUP BY day
+             ORDER BY day ASC`
+          )
+          .all() as any[]
+        db.close()
+
+        dailyActivities = dailyRows.map((dr) => {
+          const tot = Number(dr.totalTokens || 0)
+          const inTok = Math.round(tot * 0.9)
+          const cacheTok = Math.round(inTok * 0.8)
+          const outTok = Math.round(tot * 0.1)
+          const { costUsd, savingsUsd } = calculateCost('hy4-free', inTok, cacheTok, outTok, 0)
+          return {
+            date: String(dr.day),
+            totalTokens: tot,
+            inputTokens: inTok,
+            cachedTokens: cacheTok,
+            outputTokens: outTok,
+            reasoningTokens: 0,
+            sessionCount: Number(dr.sessionCount || 0),
+            costUsd,
+            cacheSavingsUsd: savingsUsd
+          }
+        })
+      } catch {
+        // ignore
+      }
+    }
+
     const cacheHitRate = inputTokens > 0 ? Number(((cachedTokens / inputTokens) * 100).toFixed(1)) : 0
     const withSpeed = recentSessions.filter((s) => s.outputTokensPerSec && s.outputTokensPerSec > 0)
     const latestWithSpeed = withSpeed[0]
@@ -327,6 +380,13 @@ export class WorkBuddyAdapter extends DesktopTargetAdapter {
             ).toFixed(1)
           )
         : undefined
+
+    const totalCostUsd = Number(
+      recentSessions.reduce((acc, s) => acc + (s.costUsd || 0), 0).toFixed(2)
+    )
+    const totalCacheSavingsUsd = Number(
+      recentSessions.reduce((acc, s) => acc + (s.cacheSavingsUsd || 0), 0).toFixed(2)
+    )
 
     return {
       targetId: this.id,
@@ -343,6 +403,9 @@ export class WorkBuddyAdapter extends DesktopTargetAdapter {
       latestOutputTokensPerSec: latestWithSpeed?.outputTokensPerSec,
       latestDurationMs: latestWithSpeed?.durationMs,
       avgOutputTokensPerSec,
+      totalCostUsd,
+      totalCacheSavingsUsd,
+      dailyActivities,
       recentSessions
     }
   }
