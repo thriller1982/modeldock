@@ -58,7 +58,15 @@ const PRICING_CATALOG: Record<string, ModelPricing> = {
   // --- Tencent Hunyuan ---
   'hy4-free': { inputPerM: 0.0, cachePerM: 0.0, outputPerM: 0.0 }, // Free quota
   'hunyuan-pro': { inputPerM: 0.42, cachePerM: 0.1, outputPerM: 1.4 },
-  'hunyuan-t1': { inputPerM: 0.42, cachePerM: 0.1, outputPerM: 1.4 }
+  'hunyuan-t1': { inputPerM: 0.42, cachePerM: 0.1, outputPerM: 1.4 },
+
+  // --- Qwen / GLM / MiMo / StepFun ---
+  'qwen-max': { inputPerM: 0.28, cachePerM: 0.05, outputPerM: 0.84 },
+  'qwen-plus': { inputPerM: 0.11, cachePerM: 0.02, outputPerM: 0.28 },
+  'qwen-flash': { inputPerM: 0.02, cachePerM: 0.005, outputPerM: 0.06 },
+  'glm-5': { inputPerM: 0.15, cachePerM: 0.05, outputPerM: 0.5 },
+  'mimo-v2.5-pro': { inputPerM: 0.1, cachePerM: 0.02, outputPerM: 0.2 },
+  'step-5': { inputPerM: 0.4, cachePerM: 0.1, outputPerM: 1.2 }
 }
 
 const DEFAULT_FALLBACK_PRICING: ModelPricing = {
@@ -101,6 +109,12 @@ export function getModelPricing(modelName: string): ModelPricing {
   if (norm.includes('kimi') || norm.includes('moonshot')) return PRICING_CATALOG['kimi-k3.1-pro']
   if (norm.includes('free') || norm.includes('hy4')) return PRICING_CATALOG['hy4-free']
   if (norm.includes('hunyuan')) return PRICING_CATALOG['hunyuan-pro']
+
+  if (norm.includes('luna')) return PRICING_CATALOG['gpt-5-codex']
+  if (norm.includes('qwen') || norm.includes('tongyi')) return PRICING_CATALOG['qwen-flash']
+  if (norm.includes('glm')) return PRICING_CATALOG['glm-5']
+  if (norm.includes('mimo')) return PRICING_CATALOG['mimo-v2.5-pro']
+  if (norm.includes('step')) return PRICING_CATALOG['step-5']
 
   return DEFAULT_FALLBACK_PRICING
 }

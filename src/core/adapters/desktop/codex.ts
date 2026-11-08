@@ -277,37 +277,20 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
           .all(limit) as any[]
 
         // Historical daily activity aggregation
+        let rawDailyRows: any[] = []
         try {
-          const dailyRows = db
+          rawDailyRows = db
             .prepare(
               `SELECT strftime('%Y-%m-%d', datetime(updated_at, 'unixepoch', 'localtime')) as day,
+                      model,
                       COUNT(*) as sessionCount,
                       SUM(tokens_used) as totalTokens
                FROM threads
                WHERE tokens_used > 0
-               GROUP BY day
+               GROUP BY day, model
                ORDER BY day ASC`
             )
             .all() as any[]
-
-          dailyActivities = dailyRows.map((dr) => {
-            const tot = Number(dr.totalTokens || 0)
-            const inTok = Math.round(tot * 0.92)
-            const cacheTok = Math.round(inTok * 0.88)
-            const outTok = Math.round(tot * 0.08)
-            const { costUsd, savingsUsd } = calculateCost('gpt-6.1-sol', inTok, cacheTok, outTok, 0)
-            return {
-              date: String(dr.day),
-              totalTokens: tot,
-              inputTokens: inTok,
-              cachedTokens: cacheTok,
-              outputTokens: outTok,
-              reasoningTokens: 0,
-              sessionCount: Number(dr.sessionCount || 0),
-              costUsd,
-              cacheSavingsUsd: savingsUsd
-            }
-          })
         } catch {
           // ignore
         }
@@ -411,6 +394,81 @@ export class CodexDesktopAdapter extends DesktopTargetAdapter {
               source: 'native-log'
             })
           }
+        }
+
+        // Build daily activities accurately by merging recentSessions and model-specific historical rows
+        try {
+          const dailyMap = new Map<string, DailyActivityItem>()
+
+          // 1. Group recentSessions by date
+          for (const s of recentSessions) {
+            const dateStr = new Date(s.updatedAt).toISOString().slice(0, 10)
+            if (!dailyMap.has(dateStr)) {
+              dailyMap.set(dateStr, {
+                date: dateStr,
+                totalTokens: 0,
+                inputTokens: 0,
+                cachedTokens: 0,
+                outputTokens: 0,
+                reasoningTokens: 0,
+                sessionCount: 0,
+                costUsd: 0,
+                cacheSavingsUsd: 0
+              })
+            }
+            const item = dailyMap.get(dateStr)!
+            item.totalTokens += s.totalTokens
+            item.inputTokens += s.inputTokens
+            item.cachedTokens += s.cachedTokens
+            item.outputTokens += s.outputTokens
+            item.reasoningTokens += s.reasoningTokens
+            item.sessionCount += 1
+            item.costUsd = Number(((item.costUsd || 0) + (s.costUsd || 0)).toFixed(3))
+            item.cacheSavingsUsd = Number(
+              ((item.cacheSavingsUsd || 0) + (s.cacheSavingsUsd || 0)).toFixed(3)
+            )
+          }
+
+          // 2. Add other historical days from rawDailyRows using each thread's actual model
+          for (const dr of rawDailyRows) {
+            const day = String(dr.day)
+            if (!dailyMap.has(day)) {
+              dailyMap.set(day, {
+                date: day,
+                totalTokens: 0,
+                inputTokens: 0,
+                cachedTokens: 0,
+                outputTokens: 0,
+                reasoningTokens: 0,
+                sessionCount: 0,
+                costUsd: 0,
+                cacheSavingsUsd: 0
+              })
+            }
+
+            const m = dr.model || 'gpt-6.1-terra'
+            const tot = Number(dr.totalTokens || 0)
+            const inTok = Math.round(tot * 0.92)
+            const cacheTok = Math.round(inTok * 0.88)
+            const outTok = Math.round(tot * 0.08)
+            const { costUsd, savingsUsd } = calculateCost(m, inTok, cacheTok, outTok, 0)
+
+            const dayItem = dailyMap.get(day)!
+            dayItem.sessionCount += Number(dr.sessionCount || 0)
+
+            if (!recentSessions.some((s) => new Date(s.updatedAt).toISOString().slice(0, 10) === day)) {
+              dayItem.totalTokens += tot
+              dayItem.inputTokens += inTok
+              dayItem.cachedTokens += cacheTok
+              dayItem.outputTokens += outTok
+              dayItem.costUsd = Number(((dayItem.costUsd || 0) + costUsd).toFixed(3))
+              dayItem.cacheSavingsUsd = Number(((dayItem.cacheSavingsUsd || 0) + savingsUsd).toFixed(3))
+            }
+          }
+
+          dailyActivities = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date))
+        } catch {
+          // ignore
         }
       } catch {
         // ignore sqlite lock/read error

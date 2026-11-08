@@ -171,144 +171,302 @@ export class OpenCodeAdapter extends CliTargetAdapter {
             }
           }
 
-          const freshIn = Number(r.tokens_input || 0)
-          const cacheRead = Number(r.tokens_cache_read || 0)
-          const cacheWrite = Number(r.tokens_cache_write || 0)
-          // Total input context = fresh input + cache read + cache write
-          const sInputTotal = freshIn + cacheRead + cacheWrite
-          const sOutput = Number(r.tokens_output || 0)
-          const sReasoning = Number(r.tokens_reasoning || 0)
-          const sTotal = sInputTotal + sOutput + sReasoning
+          const byModel = new Map<
+            string,
+            {
+              modelId: string
+              providerId: string
+              freshIn: number
+              cacheRead: number
+              cacheWrite: number
+              sOutput: number
+              sReasoning: number
+              sTotal: number
+              durationMs: number
+              lastTurnDurMs: number
+              lastTurnTokens: number
+              measuredTokens: number
+              count: number
+            }
+          >()
 
-          // Calculate active generation duration & tok/s from assistant messages
-          let durationMs = 0
-          let measuredTokens = 0
-          let lastTurnDurMs = 0
-          let lastTurnTokens = 0
           try {
             const msgRows = msgStmt.all(r.id) as { type: string; data: string }[]
-            let curTurnDur = 0
-            let curTurnTok = 0
             for (const m of msgRows) {
-              if (m.type === 'user') {
-                if (curTurnDur > 0 && curTurnTok > 0) {
-                  lastTurnDurMs = curTurnDur
-                  lastTurnTokens = curTurnTok
+              if (m.type === 'assistant') {
+                const d = JSON.parse(m.data)
+                if (d.role && d.role !== 'assistant') continue
+                const curModel = d.model?.id || d.modelID || modelId
+                const curProvider = d.model?.providerID || providerId
+
+                let b = byModel.get(curModel)
+                if (!b) {
+                  b = {
+                    modelId: curModel,
+                    providerId: curProvider,
+                    freshIn: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    sOutput: 0,
+                    sReasoning: 0,
+                    sTotal: 0,
+                    durationMs: 0,
+                    lastTurnDurMs: 0,
+                    lastTurnTokens: 0,
+                    measuredTokens: 0,
+                    count: 0
+                  }
+                  byModel.set(curModel, b)
                 }
-                curTurnDur = 0
-                curTurnTok = 0
-                continue
-              }
-              const d = JSON.parse(m.data)
-              if (d.role && d.role !== 'assistant') continue
-              const start = Number(d.time?.created || 0)
-              // Prefer d.time.streamed so tool execution wait time after token streaming is excluded
-              const end = Number(d.time?.streamed || d.time?.completed || 0)
-              const msgTok =
-                Number(d.tokens?.output || 0) + Number(d.tokens?.reasoning || 0)
-              if (start > 0 && end > start && end - start < 600_000) {
-                const delta = end - start
-                durationMs += delta
-                curTurnDur += delta
-                if (msgTok > 0) {
-                  measuredTokens += msgTok
-                  curTurnTok += msgTok
+
+                b.count++
+                const inTok = Number(d.tokens?.input || 0)
+                const cRead = Number(d.tokens?.cache?.read ?? d.tokens?.cache_read ?? 0)
+                const cWrite = Number(d.tokens?.cache?.write ?? d.tokens?.cache_write ?? 0)
+                const outTok = Number(d.tokens?.output || 0)
+                const reasonTok = Number(d.tokens?.reasoning || 0)
+
+                b.freshIn += inTok
+                b.cacheRead += cRead
+                b.cacheWrite += cWrite
+                b.sOutput += outTok
+                b.sReasoning += reasonTok
+                b.sTotal += inTok + cRead + cWrite + outTok + reasonTok
+
+                const start = Number(d.time?.created || 0)
+                const end = Number(d.time?.streamed || d.time?.completed || 0)
+                const msgTok = outTok + reasonTok
+                if (start > 0 && end > start && end - start < 600_000) {
+                  const delta = end - start
+                  b.durationMs += delta
+                  if (msgTok > 0) {
+                    b.measuredTokens += msgTok
+                    b.lastTurnDurMs = delta
+                    b.lastTurnTokens = msgTok
+                  }
                 }
               }
-            }
-            if (curTurnDur > 0 && curTurnTok > 0) {
-              lastTurnDurMs = curTurnDur
-              lastTurnTokens = curTurnTok
             }
           } catch {
             // ignore
           }
 
-          const displayDurMs = lastTurnDurMs > 0 ? lastTurnDurMs : durationMs
-          const displayTokens =
-            lastTurnTokens > 0
-              ? lastTurnTokens
-              : measuredTokens > 0
-              ? measuredTokens
-              : sOutput + sReasoning
-          const outputTokensPerSec =
-            displayDurMs > 200 && displayTokens > 0
-              ? Number(((displayTokens / displayDurMs) * 1000).toFixed(1))
-              : undefined
+          if (byModel.size === 0) {
+            const freshIn = Number(r.tokens_input || 0)
+            const cacheRead = Number(r.tokens_cache_read || 0)
+            const cacheWrite = Number(r.tokens_cache_write || 0)
+            const sInputTotal = freshIn + cacheRead + cacheWrite
+            const sOutput = Number(r.tokens_output || 0)
+            const sReasoning = Number(r.tokens_reasoning || 0)
+            const sTotal = sInputTotal + sOutput + sReasoning
 
-          inputTokens += sInputTotal
-          cachedTokens += cacheRead
-          cacheWriteTokens += cacheWrite
-          outputTokens += sOutput
-          reasoningTokens += sReasoning
-          totalTokens += sTotal
+            inputTokens += sInputTotal
+            cachedTokens += cacheRead
+            cacheWriteTokens += cacheWrite
+            outputTokens += sOutput
+            reasoningTokens += sReasoning
+            totalTokens += sTotal
 
-          const hitRate =
-            sInputTotal > 0 ? Number(((cacheRead / sInputTotal) * 100).toFixed(1)) : 0
+            const hitRate =
+              sInputTotal > 0 ? Number(((cacheRead / sInputTotal) * 100).toFixed(1)) : 0
+            const { costUsd, savingsUsd } = calculateCost(
+              modelId,
+              sInputTotal,
+              cacheRead,
+              sOutput,
+              sReasoning
+            )
 
-          const { costUsd, savingsUsd } = calculateCost(
-            modelId,
-            sInputTotal,
-            cacheRead,
-            sOutput,
-            sReasoning
-          )
+            recentSessions.push({
+              id: r.id,
+              targetId: this.id,
+              targetName: this.name,
+              category: this.category,
+              title: r.title || 'OpenCode Session',
+              model: modelId,
+              provider: providerId,
+              inputTokens: sInputTotal,
+              cachedTokens: cacheRead,
+              cacheWriteTokens: cacheWrite,
+              outputTokens: sOutput,
+              reasoningTokens: sReasoning,
+              totalTokens: sTotal,
+              cacheHitRate: hitRate,
+              outputTokensPerSec: undefined,
+              durationMs: undefined,
+              costUsd,
+              cacheSavingsUsd: savingsUsd,
+              updatedAt: Number(r.time_updated || Date.now()),
+              source: 'native-log'
+            })
+          } else {
+            const multiModel = byModel.size > 1
+            for (const b of byModel.values()) {
+              const sInputTotal = b.freshIn + b.cacheRead + b.cacheWrite
+              const sTotal = sInputTotal + b.sOutput + b.sReasoning
+              if (sTotal <= 0) continue
 
-          recentSessions.push({
-            id: r.id,
-            targetId: this.id,
-            targetName: this.name,
-            category: this.category,
-            title: r.title || 'OpenCode Session',
-            model: modelId,
-            provider: providerId,
-            inputTokens: sInputTotal,
-            cachedTokens: cacheRead,
-            cacheWriteTokens: cacheWrite,
-            outputTokens: sOutput,
-            reasoningTokens: sReasoning,
-            totalTokens: sTotal,
-            cacheHitRate: hitRate,
-            outputTokensPerSec,
-            durationMs: displayDurMs > 0 ? displayDurMs : undefined,
-            costUsd,
-            cacheSavingsUsd: savingsUsd,
-            updatedAt: Number(r.time_updated || Date.now()),
-            source: 'native-log'
-          })
+              inputTokens += sInputTotal
+              cachedTokens += b.cacheRead
+              cacheWriteTokens += b.cacheWrite
+              outputTokens += b.sOutput
+              reasoningTokens += b.sReasoning
+              totalTokens += sTotal
+
+              const hitRate =
+                sInputTotal > 0 ? Number(((b.cacheRead / sInputTotal) * 100).toFixed(1)) : 0
+              const outputTokensPerSec =
+                b.lastTurnDurMs > 200 && b.lastTurnTokens > 0
+                  ? Number(((b.lastTurnTokens / b.lastTurnDurMs) * 1000).toFixed(1))
+                  : b.durationMs > 200 && b.measuredTokens > 0
+                  ? Number(((b.measuredTokens / b.durationMs) * 1000).toFixed(1))
+                  : undefined
+
+              const { costUsd, savingsUsd } = calculateCost(
+                b.modelId,
+                sInputTotal,
+                b.cacheRead,
+                b.sOutput,
+                b.sReasoning
+              )
+
+              const baseTitle = r.title || 'OpenCode Session'
+              const title = multiModel ? `${baseTitle} (${b.modelId})` : baseTitle
+
+              recentSessions.push({
+                id: multiModel ? `${r.id}_${b.modelId}` : r.id,
+                targetId: this.id,
+                targetName: this.name,
+                category: this.category,
+                title,
+                model: b.modelId,
+                provider: b.providerId,
+                inputTokens: sInputTotal,
+                cachedTokens: b.cacheRead,
+                cacheWriteTokens: b.cacheWrite,
+                outputTokens: b.sOutput,
+                reasoningTokens: b.sReasoning,
+                totalTokens: sTotal,
+                cacheHitRate: hitRate,
+                outputTokensPerSec,
+                durationMs: b.lastTurnDurMs > 0 ? b.lastTurnDurMs : b.durationMs || undefined,
+                costUsd,
+                cacheSavingsUsd: savingsUsd,
+                updatedAt: Number(r.time_updated || Date.now()),
+                source: 'native-log'
+              })
+            }
+          }
         }
 
-        // Daily activity aggregation
+        // Daily activity aggregation from real session database
         try {
+          const dailyMap = new Map<string, DailyActivityItem>()
+
+          // 1. Group recentSessions by date
+          for (const s of recentSessions) {
+            const dateStr = new Date(s.updatedAt).toISOString().slice(0, 10)
+            if (!dailyMap.has(dateStr)) {
+              dailyMap.set(dateStr, {
+                date: dateStr,
+                totalTokens: 0,
+                inputTokens: 0,
+                cachedTokens: 0,
+                outputTokens: 0,
+                reasoningTokens: 0,
+                sessionCount: 0,
+                costUsd: 0,
+                cacheSavingsUsd: 0
+              })
+            }
+            const item = dailyMap.get(dateStr)!
+            item.totalTokens += s.totalTokens
+            item.inputTokens += s.inputTokens
+            item.cachedTokens += s.cachedTokens
+            item.outputTokens += s.outputTokens
+            item.reasoningTokens += s.reasoningTokens
+            item.sessionCount += 1
+            item.costUsd = Number(((item.costUsd || 0) + (s.costUsd || 0)).toFixed(4))
+            item.cacheSavingsUsd = Number(
+              ((item.cacheSavingsUsd || 0) + (s.cacheSavingsUsd || 0)).toFixed(4)
+            )
+          }
+
+          // 2. Aggregate all historical days with actual models from session table
           const dailyRows = db
             .prepare(
               `SELECT strftime('%Y-%m-%d', datetime(time_created / 1000, 'unixepoch', 'localtime')) as day,
-                      COUNT(*) as sessionCount
+                      model,
+                      COUNT(*) as sessionCount,
+                      SUM(tokens_input) as inTok,
+                      SUM(tokens_cache_read) as cacheTok,
+                      SUM(tokens_output) as outTok,
+                      SUM(tokens_reasoning) as reasonTok
                FROM session
-               GROUP BY day
+               WHERE (tokens_input > 0 OR tokens_cache_read > 0 OR tokens_output > 0)
+               GROUP BY day, model
                ORDER BY day ASC`
             )
             .all() as any[]
 
-          dailyActivities = dailyRows.map((dr) => {
-            const count = Number(dr.sessionCount || 0)
-            const inTok = count * 45000
-            const cacheTok = Math.floor(inTok * 0.75)
-            const outTok = count * 1200
-            const tot = inTok + outTok
-            const { costUsd, savingsUsd } = calculateCost('claude-3-5-sonnet', inTok, cacheTok, outTok, 0)
-            return {
-              date: String(dr.day),
-              totalTokens: tot,
-              inputTokens: inTok,
-              cachedTokens: cacheTok,
-              outputTokens: outTok,
-              reasoningTokens: 0,
-              sessionCount: count,
-              costUsd,
-              cacheSavingsUsd: savingsUsd
+          for (const dr of dailyRows) {
+            const day = String(dr.day)
+            if (!dailyMap.has(day)) {
+              dailyMap.set(day, {
+                date: day,
+                totalTokens: 0,
+                inputTokens: 0,
+                cachedTokens: 0,
+                outputTokens: 0,
+                reasoningTokens: 0,
+                sessionCount: 0,
+                costUsd: 0,
+                cacheSavingsUsd: 0
+              })
             }
-          })
+
+            let mId = 'deepseek-v4.1-flash'
+            if (dr.model) {
+              try {
+                const mObj = JSON.parse(dr.model)
+                mId = mObj.id || mId
+              } catch {
+                mId = String(dr.model)
+              }
+            }
+
+            const rawIn = Number(dr.inTok || 0)
+            const cRead = Number(dr.cacheTok || 0)
+            const inTotal = rawIn + cRead
+            const outTok = Number(dr.outTok || 0)
+            const reasonTok = Number(dr.reasonTok || 0)
+            const tot = inTotal + outTok + reasonTok
+
+            const { costUsd, savingsUsd } = calculateCost(
+              mId,
+              inTotal,
+              cRead,
+              outTok,
+              reasonTok
+            )
+
+            const dayItem = dailyMap.get(day)!
+            dayItem.sessionCount += Number(dr.sessionCount || 0)
+            // If this day was not already populated by recent sessions, add its tokens
+            if (!recentSessions.some((s) => new Date(s.updatedAt).toISOString().slice(0, 10) === day)) {
+              dayItem.totalTokens += tot
+              dayItem.inputTokens += inTotal
+              dayItem.cachedTokens += cRead
+              dayItem.outputTokens += outTok
+              dayItem.reasoningTokens += reasonTok
+              dayItem.costUsd = Number(((dayItem.costUsd || 0) + costUsd).toFixed(4))
+              dayItem.cacheSavingsUsd = Number(((dayItem.cacheSavingsUsd || 0) + savingsUsd).toFixed(4))
+            }
+          }
+
+          dailyActivities = Array.from(dailyMap.values()).sort((a, b) =>
+            a.date.localeCompare(b.date)
+          )
         } catch {
           // ignore
         }

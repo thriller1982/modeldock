@@ -328,10 +328,42 @@ export class WorkBuddyAdapter extends DesktopTargetAdapter {
 
     recentSessions.sort((a, b) => b.updatedAt - a.updatedAt)
 
-    // Daily activity aggregation from workbuddy.db
+    // Daily activity aggregation from real session logs and workbuddy.db
     let dailyActivities: DailyActivityItem[] = []
-    if (fs.existsSync(wbDbPath)) {
-      try {
+    try {
+      const dailyMap = new Map<string, DailyActivityItem>()
+
+      // 1. Populate from parsed recentSessions
+      for (const s of recentSessions) {
+        const dateStr = new Date(s.updatedAt).toISOString().slice(0, 10)
+        if (!dailyMap.has(dateStr)) {
+          dailyMap.set(dateStr, {
+            date: dateStr,
+            totalTokens: 0,
+            inputTokens: 0,
+            cachedTokens: 0,
+            outputTokens: 0,
+            reasoningTokens: 0,
+            sessionCount: 0,
+            costUsd: 0,
+            cacheSavingsUsd: 0
+          })
+        }
+        const item = dailyMap.get(dateStr)!
+        item.totalTokens += s.totalTokens
+        item.inputTokens += s.inputTokens
+        item.cachedTokens += s.cachedTokens
+        item.outputTokens += s.outputTokens
+        item.reasoningTokens += s.reasoningTokens
+        item.sessionCount += 1
+        item.costUsd = Number(((item.costUsd || 0) + (s.costUsd || 0)).toFixed(3))
+        item.cacheSavingsUsd = Number(
+          ((item.cacheSavingsUsd || 0) + (s.cacheSavingsUsd || 0)).toFixed(3)
+        )
+      }
+
+      // 2. Add other historical days from session_usage
+      if (fs.existsSync(wbDbPath)) {
         const db = new DatabaseSync(wbDbPath, { open: true, readOnly: true })
         const dailyRows = db
           .prepare(
@@ -346,27 +378,32 @@ export class WorkBuddyAdapter extends DesktopTargetAdapter {
           .all() as any[]
         db.close()
 
-        dailyActivities = dailyRows.map((dr) => {
-          const tot = Number(dr.totalTokens || 0)
-          const inTok = Math.round(tot * 0.9)
-          const cacheTok = Math.round(inTok * 0.8)
-          const outTok = Math.round(tot * 0.1)
-          const { costUsd, savingsUsd } = calculateCost('hy4-free', inTok, cacheTok, outTok, 0)
-          return {
-            date: String(dr.day),
-            totalTokens: tot,
-            inputTokens: inTok,
-            cachedTokens: cacheTok,
-            outputTokens: outTok,
-            reasoningTokens: 0,
-            sessionCount: Number(dr.sessionCount || 0),
-            costUsd,
-            cacheSavingsUsd: savingsUsd
+        for (const dr of dailyRows) {
+          const day = String(dr.day)
+          if (!dailyMap.has(day)) {
+            const tot = Number(dr.totalTokens || 0)
+            const inTok = Math.round(tot * 0.9)
+            const cacheTok = Math.round(inTok * 0.8)
+            const outTok = Math.round(tot * 0.1)
+            const { costUsd, savingsUsd } = calculateCost('hy4-free', inTok, cacheTok, outTok, 0)
+            dailyMap.set(day, {
+              date: day,
+              totalTokens: tot,
+              inputTokens: inTok,
+              cachedTokens: cacheTok,
+              outputTokens: outTok,
+              reasoningTokens: 0,
+              sessionCount: Number(dr.sessionCount || 0),
+              costUsd,
+              cacheSavingsUsd: savingsUsd
+            })
           }
-        })
-      } catch {
-        // ignore
+        }
       }
+
+      dailyActivities = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date))
+    } catch {
+      // ignore
     }
 
     const cacheHitRate = inputTokens > 0 ? Number(((cachedTokens / inputTokens) * 100).toFixed(1)) : 0
