@@ -2264,15 +2264,20 @@ export default function App() {
                 </div>
 
                 {/* 开机自动启动开关 */}
-                <div className="flex items-center justify-between gap-4 py-2 border-t border-border pt-4">
+                <div
+                  onClick={handleToggleAutoLaunch}
+                  className="flex items-center justify-between gap-4 py-2 border-t border-border pt-4 cursor-pointer group"
+                >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-[13px] font-medium text-fg-1">开机自动启动 (Run on Startup)</span>
+                      <span className="text-[13px] font-medium text-fg-1 group-hover:text-action transition-colors">
+                        开机自动启动 (Run on Startup)
+                      </span>
                       <span
                         className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                           autoLaunch
                             ? 'bg-success-soft text-success-text'
-                            : 'bg-subtle text-fg-3'
+                            : 'bg-zinc-100 dark:bg-zinc-800 text-fg-3 border border-border'
                         }`}
                       >
                         {autoLaunch ? '● 已开启自启' : '○ 未开启'}
@@ -2283,21 +2288,38 @@ export default function App() {
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={autoLaunch}
-                    onClick={handleToggleAutoLaunch}
-                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      autoLaunch ? 'bg-action' : 'bg-subtle-hover border-border'
-                    }`}
-                  >
+                  <div className="flex items-center gap-2.5 shrink-0">
                     <span
-                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                        autoLaunch ? 'translate-x-5' : 'translate-x-0'
+                      className={`text-xs transition-colors ${
+                        autoLaunch
+                          ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                          : 'text-fg-3 group-hover:text-action font-medium'
                       }`}
-                    />
-                  </button>
+                    >
+                      {autoLaunch ? '已启用' : '点击开启'}
+                    </span>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={autoLaunch}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleToggleAutoLaunch()
+                      }}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full p-0.5 transition-colors duration-200 ease-in-out focus:outline-none shadow-inner ${
+                        autoLaunch
+                          ? 'bg-emerald-600 dark:bg-emerald-500'
+                          : 'bg-slate-300 dark:bg-zinc-700 hover:bg-slate-400 dark:hover:bg-zinc-600'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-1 ring-black/10 transition duration-200 ease-in-out ${
+                          autoLaunch ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
               </div>
 
