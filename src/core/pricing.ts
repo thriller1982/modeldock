@@ -36,11 +36,16 @@ const PRICING_CATALOG: Record<string, ModelPricing> = {
   'claude-3-5-sonnet': { inputPerM: 3.0, cachePerM: 0.3, outputPerM: 15.0 },
   'claude-3-5-haiku': { inputPerM: 0.8, cachePerM: 0.08, outputPerM: 4.0 },
   'claude-3-opus': { inputPerM: 15.0, cachePerM: 1.5, outputPerM: 75.0 },
+  'claude-opus-5.5': { inputPerM: 15.0, cachePerM: 1.5, outputPerM: 75.0 },
+  'claude-opus-5': { inputPerM: 15.0, cachePerM: 1.5, outputPerM: 75.0 },
 
   // --- Google Gemini ---
   'gemini-4-argon': { inputPerM: 1.25, cachePerM: 0.3125, outputPerM: 5.0 },
   'gemini-2.5-pro': { inputPerM: 1.25, cachePerM: 0.3125, outputPerM: 5.0 },
   'gemini-1.5-pro': { inputPerM: 1.25, cachePerM: 0.3125, outputPerM: 5.0 },
+  'gemini-3.8-flash': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
+  'gemini-3.8': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
+  'gemini-3-flash': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
   'gemini-2.5-flash': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
   'gemini-2.0-flash': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
   'gemini-1.5-flash': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
@@ -85,12 +90,13 @@ export function getModelPricing(modelName: string): ModelPricing {
 
   if (norm.includes('sonnet')) return PRICING_CATALOG['claude-3-7-sonnet']
   if (norm.includes('haiku')) return PRICING_CATALOG['claude-3-5-haiku']
-  if (norm.includes('opus')) return PRICING_CATALOG['claude-3-opus']
+  if (norm.includes('opus')) return PRICING_CATALOG['claude-opus-5.5'] || PRICING_CATALOG['claude-3-opus']
 
   if (norm.includes('argon')) return PRICING_CATALOG['gemini-4-argon']
-  if (norm.includes('flash') && norm.includes('gemini')) return PRICING_CATALOG['gemini-2.5-flash']
+  if (norm.includes('3.8') || norm.includes('3-flash')) return PRICING_CATALOG['gemini-3.8-flash']
+  if (norm.includes('flash') && norm.includes('gemini')) return PRICING_CATALOG['gemini-3.8-flash']
   if (norm.includes('pro') && norm.includes('gemini')) return PRICING_CATALOG['gemini-2.5-pro']
-  if (norm.includes('gemini')) return PRICING_CATALOG['gemini-2.5-flash']
+  if (norm.includes('gemini')) return PRICING_CATALOG['gemini-3.8-flash']
 
   if (norm.includes('kimi') || norm.includes('moonshot')) return PRICING_CATALOG['kimi-k3.1-pro']
   if (norm.includes('free') || norm.includes('hy4')) return PRICING_CATALOG['hy4-free']
