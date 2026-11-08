@@ -197,8 +197,13 @@ export class AntigravityAdapter extends DesktopTargetAdapter {
       const cached = reportedInput ? tokenCount(step.cache_read_tokens)
         : contextLength > 4000 ? Math.floor(estimatedInput * 0.86) : 0
       const input = reportedInput ? tokenCount(step.input_tokens) + cached : estimatedInput
-      const output = reportedOutput ? tokenCount(step.output_tokens) : Math.ceil(outputLength / 3.5)
-      const reasoning = step.reasoning_tokens == null ? Math.ceil(reasoningLength / 3.5) : tokenCount(step.reasoning_tokens)
+      const reasoning = step.reasoning_tokens != null
+        ? tokenCount(step.reasoning_tokens)
+        : Math.ceil(reasoningLength / 3.5)
+      // Antigravity/Gemini official step.output_tokens already encompasses thoughts/reasoning.
+      // Separate text output from reasoning so that total tokens and cost do not double-count reasoning.
+      const rawOutput = reportedOutput ? tokenCount(step.output_tokens) : Math.ceil(outputLength / 3.5)
+      const output = reportedOutput ? Math.max(0, rawOutput - reasoning) : rawOutput
 
       let bucket = usage.get(model)
       if (!bucket) {
