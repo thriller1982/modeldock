@@ -1,5 +1,15 @@
 import { app, shell, BrowserWindow, ipcMain, nativeImage } from 'electron'
 import { join } from 'path'
+import { appendFileSync } from 'fs'
+
+function log(msg: string): void {
+  try {
+    appendFileSync(join(app.getPath('userData'), 'startup.log'), `[${new Date().toISOString()}] ${msg}\n`)
+  } catch {
+    // ignore
+  }
+}
+
 import { coreController } from '../core/controller'
 import { APP_ICON_DATA_URL } from './icons-data'
 import { initTray, notifyMinimizedToTray, updateTrayMenu } from './tray'
@@ -34,12 +44,19 @@ function createWindow(): BrowserWindow {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
-    const isHidden = process.argv.includes('--hidden') || process.argv.includes('--minimized')
-    if (!isHidden && mainWindow) {
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc) => log(`did-fail-load ${code} ${desc}`))
+  mainWindow.webContents.on('render-process-gone', (_e, d) => log(`render-process-gone ${d.reason}`))
+  mainWindow.webContents.on('console-message', (_e, level, message) => { if (level >= 2) log(`renderer: ${message}`) })
+  const isHidden = process.argv.includes('--hidden') || process.argv.includes('--minimized')
+  const revealWindow = (reason: string): void => {
+    log(`reveal: ${reason}`)
+    if (!isHidden && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
       mainWindow.show()
     }
-  })
+  }
+  mainWindow.once('ready-to-show', () => revealWindow('ready-to-show'))
+  mainWindow.webContents.once('did-finish-load', () => revealWindow('did-finish-load'))
+  setTimeout(() => revealWindow('timeout'), 3000)
 
   // Intercept window close (X button): minimize to tray if enabled
   mainWindow.on('close', (event) => {
@@ -166,14 +183,25 @@ app.on('second-instance', () => {
 })
 
 app.whenReady().then(async () => {
-  await coreController.init()
+  log('app ready')
+  try {
+    await coreController.init()
+  } catch (err) {
+    log(`controller init failed: ${String(err)}`)
+  }
   registerIpcHandlers()
   const win = createWindow()
+  log('window created')
 
-  initTray(win, () => {
-    isQuitting = true
-    app.quit()
-  })
+  try {
+    initTray(win, () => {
+      isQuitting = true
+      app.quit()
+    })
+    log('tray created')
+  } catch (err) {
+    log(`tray failed: ${String(err)}`)
+  }
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -194,3 +222,5 @@ app.on('window-all-closed', () => {
     app.quit()
   }
 })
+
+

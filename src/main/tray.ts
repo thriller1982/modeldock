@@ -1,5 +1,5 @@
 import { app, shell, BrowserWindow, Tray, Menu, nativeImage } from 'electron'
-import { TRAY_ICON_DATA_URL } from './icons-data'
+import { TRAY_ICON_DATA_URL, APP_ICON_DATA_URL } from './icons-data'
 import { coreController } from '../core/controller'
 
 let trayInstance: Tray | null = null
@@ -94,7 +94,11 @@ export function initTray(mainWindow: BrowserWindow, onQuit: () => void): Tray {
     return trayInstance
   }
 
-  const icon = nativeImage.createFromDataURL(TRAY_ICON_DATA_URL)
+  let icon = nativeImage.createFromDataURL(TRAY_ICON_DATA_URL)
+  if (icon.isEmpty()) {
+    icon = nativeImage.createFromDataURL(APP_ICON_DATA_URL)
+  }
+  icon = icon.resize({ width: 16, height: 16 })
   trayInstance = new Tray(icon)
 
   trayInstance.setToolTip('ModelDock · AI 研发工具配置与缓存率监控中心')
