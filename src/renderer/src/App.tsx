@@ -38,6 +38,7 @@ import {
   Zap
 } from 'lucide-react'
 import { clientApi } from './api'
+import { localUsageDay } from '../../core/usage'
 import type {
   DailyActivityItem,
   DashboardSnapshot,
@@ -61,6 +62,11 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(n)
+}
+
+function formatUsageCost(cost = 0, unpriced = 0, precision = 2): string {
+  if (unpriced && cost === 0) return '未计价'
+  return '$' + cost.toFixed(precision) + (unpriced ? '（部分）' : '')
 }
 
 function formatTime(ts: number): string {
@@ -128,16 +134,12 @@ interface TokenActivityHeatmapProps {
   activities?: DailyActivityItem[]
   title?: string
   targetName?: string
-  totalCostUsd?: number
-  totalSavingsUsd?: number
 }
 
 function TokenActivityHeatmap({
   activities = [],
   title = 'Token 活动',
-  targetName = '全部',
-  totalCostUsd,
-  totalSavingsUsd
+  targetName = '全部'
 }: TokenActivityHeatmapProps) {
   const [mode, setMode] = useState<'daily' | 'weekly' | 'cumulative'>('daily')
   const [tooltip, setTooltip] = useState<{
@@ -150,6 +152,7 @@ function TokenActivityHeatmap({
     cachedTok: number
     costUsd: number
     savingsUsd: number
+    unpricedCount: number
     sessionCount: number
   } | null>(null)
 
@@ -165,7 +168,8 @@ function TokenActivityHeatmap({
     const today = new Date()
     const end = new Date(today.getFullYear(), today.getMonth(), today.getDate())
     const totalDays = 52 * 7
-    const start = new Date(end.getTime() - (totalDays - 1) * 86400000)
+    const start = new Date(end)
+    start.setDate(start.getDate() - totalDays + 1)
 
     const wList: {
       weekIdx: number
@@ -182,6 +186,7 @@ function TokenActivityHeatmap({
     let totalTok = 0
     let totalCost = 0
     let totalSav = 0
+    let unpricedCount = 0
     let activeDays = 0
 
     const monthCols: { col: number; label: string }[] = []
@@ -197,8 +202,9 @@ function TokenActivityHeatmap({
       }[] = []
 
       for (let d = 0; d < 7; d++) {
-        const curDate = new Date(start.getTime() + (w * 7 + d) * 86400000)
-        const dateStr = curDate.toISOString().slice(0, 10)
+        const curDate = new Date(start)
+        curDate.setDate(start.getDate() + w * 7 + d)
+        const dateStr = localUsageDay(curDate.getTime())
         const item = activityMap.get(dateStr)
         const tokens = item?.totalTokens || 0
         if (tokens > maxTokens) maxTokens = tokens
@@ -207,6 +213,7 @@ function TokenActivityHeatmap({
           totalTok += tokens
           totalCost += item?.costUsd || 0
           totalSav += item?.cacheSavingsUsd || 0
+          unpricedCount += item?.unpricedCount || 0
         }
 
         let level = 0
@@ -243,6 +250,7 @@ function TokenActivityHeatmap({
         totalTok,
         totalCost,
         totalSav,
+        unpricedCount,
         activeDays,
         avgDailyTok: activeDays > 0 ? Math.round(totalTok / activeDays) : 0
       }
@@ -345,6 +353,7 @@ function TokenActivityHeatmap({
                           cachedTok: d.data?.cachedTokens || 0,
                           costUsd: d.data?.costUsd || 0,
                           savingsUsd: d.data?.cacheSavingsUsd || 0,
+                          unpricedCount: d.data?.unpricedCount || 0,
                           sessionCount: d.data?.sessionCount || 0
                         })
                       }}
@@ -467,13 +476,13 @@ function TokenActivityHeatmap({
                 {formatTokens(tooltip.outTok)}
               </div>
               <div className="text-emerald-300 font-medium">
-                等值额度: {tooltip.costUsd > 0 ? `$${tooltip.costUsd.toFixed(3)}` : '免费 / $0.000'}
-                {tooltip.costUsd > 0 && tooltip.savingsUsd > 0
-                  ? ` (缓存为您节省 $${tooltip.savingsUsd.toFixed(3)})`
+                等值额度: {formatUsageCost(tooltip.costUsd, tooltip.unpricedCount, 3)}
+                {tooltip.savingsUsd !== 0
+                  ? ` (缓存净节省 $${tooltip.savingsUsd.toFixed(3)})`
                   : ''}
               </div>
               {tooltip.sessionCount > 0 && (
-                <div className="opacity-75">共 {tooltip.sessionCount} 次会话调用</div>
+                <div className="opacity-75">共 {tooltip.sessionCount} 个会话</div>
               )}
             </div>
           ) : (
@@ -498,16 +507,16 @@ function TokenActivityHeatmap({
         </div>
         <div className="flex items-center gap-3">
           <span>
-            官方 API 标价折算:{' '}
+            近 52 周等值:{' '}
             <strong className="font-mono font-semibold text-action">
-              ${(totalCostUsd !== undefined ? totalCostUsd : stats.totalCost).toFixed(2)}
+              {formatUsageCost(stats.totalCost, stats.unpricedCount)}
             </strong>
           </span>
           <span>·</span>
           <span>
-            Prompt 缓存为您节省:{' '}
+            缓存净节省:{' '}
             <strong className="font-mono font-semibold text-route-text">
-              ${(totalSavingsUsd !== undefined ? totalSavingsUsd : stats.totalSav).toFixed(2)}
+              {stats.unpricedCount && stats.totalCost === 0 ? "—" : "$" + stats.totalSav.toFixed(2)}
             </strong>
           </span>
         </div>
@@ -597,6 +606,28 @@ export default function App() {
   useEffect(() => {
     refreshAll()
   }, [])
+
+  useEffect(() => {
+    if (!['app', 'usage', 'sessions'].includes(view) || loading) return
+    let active = true
+    let refreshing = false
+    const timer = window.setInterval(async () => {
+      if (document.hidden || refreshing) return
+      refreshing = true
+      try {
+        const next = await clientApi.getDashboard()
+        if (active) setDashboard(next)
+      } catch {
+        // The next refresh can retry a temporarily unavailable dashboard.
+      } finally {
+        refreshing = false
+      }
+    }, 15000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [view, loading])
 
   const allTargets = [...desktopTargets, ...cliTargets]
   const currentTarget = allTargets.find((t) => t.id === activeAppId) || allTargets[0]
@@ -1156,11 +1187,11 @@ export default function App() {
                     {currentSummary.totalCostUsd !== undefined && (
                       <div className="flex items-center gap-1 rounded-full bg-subtle px-2.5 py-0.5 font-mono text-fg-1">
                         <DollarSign className="h-3 w-3 text-fg-3" />
-                        <span className="font-semibold">${currentSummary.totalCostUsd.toFixed(2)}</span>
+                        <span className="font-semibold">{formatUsageCost(currentSummary.totalCostUsd, currentSummary.unpricedCount)}</span>
                         {currentSummary.totalCacheSavingsUsd && currentSummary.totalCacheSavingsUsd > 0 ? (
                           <span
                             className="text-[10px] text-route-text"
-                            title={`Prompt 缓存为您节省 $${currentSummary.totalCacheSavingsUsd.toFixed(2)}`}
+                            title={`缓存净节省 $${currentSummary.totalCacheSavingsUsd.toFixed(2)}`}
                           >
                             (省 ${currentSummary.totalCacheSavingsUsd.toFixed(2)})
                           </span>
@@ -1355,8 +1386,6 @@ export default function App() {
                   activities={currentSummary.dailyActivities || []}
                   title={`${APP_SHORT_NAMES[currentTarget.id]} Token 活动`}
                   targetName={APP_SHORT_NAMES[currentTarget.id]}
-                  totalCostUsd={currentSummary.totalCostUsd}
-                  totalSavingsUsd={currentSummary.totalCacheSavingsUsd}
                 />
               )}
             </div>
@@ -1390,7 +1419,8 @@ export default function App() {
                   </div>
                   <div className="mt-1 text-xs text-fg-3">
                     新鲜输入:{' '}
-                    {formatTokens(dashboard.totalInputTokens - dashboard.totalCachedTokens)}
+                    {formatTokens(dashboard.totalInputTokens - dashboard.totalCachedTokens - dashboard.totalCacheWriteTokens)}
+                    {dashboard.totalCacheWriteTokens > 0 && ` · 缓存写入 ${formatTokens(dashboard.totalCacheWriteTokens)}`}
                   </div>
                 </div>
 
@@ -1439,9 +1469,9 @@ export default function App() {
                     <DollarSign className="h-3.5 w-3.5 text-action" />
                   </div>
                   <div className="mt-1.5 font-mono text-[22px] font-semibold leading-[28px] text-fg-1">
-                    ${dashboard.totalCostUsd !== undefined ? dashboard.totalCostUsd.toFixed(2) : '0.00'}
+                    {formatUsageCost(dashboard.totalCostUsd, dashboard.unpricedCount)}
                   </div>
-                  <div className="mt-1 text-xs text-fg-3">按各家公开标价折算</div>
+                  <div className="mt-1 text-xs text-fg-3">按费率表估算{dashboard.unpricedCount > 0 && ` · ${dashboard.unpricedCount} 条未计价`}</div>
                 </div>
 
                 <div className="rounded-panel border border-emerald-500/20 bg-emerald-500/5 p-4">
@@ -1449,10 +1479,10 @@ export default function App() {
                     Prompt 缓存为您节省
                   </div>
                   <div className="mt-1.5 font-mono text-[22px] font-semibold leading-[28px] text-emerald-600 dark:text-emerald-400">
-                    省 ${dashboard.totalSavingsUsd !== undefined ? dashboard.totalSavingsUsd.toFixed(2) : '0.00'}
+                    {dashboard.unpricedCount && !dashboard.totalCostUsd ? '—' : '$' + (dashboard.totalSavingsUsd ?? 0).toFixed(2)}
                   </div>
                   <div className="mt-1 text-xs text-emerald-700/80 dark:text-emerald-300/80">
-                    缓存大幅降低 API 开销
+                    已扣除缓存写入费用
                   </div>
                 </div>
               </div>
@@ -1462,8 +1492,6 @@ export default function App() {
                 activities={dashboard.allDailyActivities || []}
                 title="Token 活动 (全平台汇总)"
                 targetName="全部 AI 工具"
-                totalCostUsd={dashboard.totalCostUsd}
-                totalSavingsUsd={dashboard.totalSavingsUsd}
               />
 
               {/* Per-App Comparison Table (Desktop vs CLI) */}
@@ -1476,7 +1504,7 @@ export default function App() {
                     <tr className="border-b border-border text-fg-3">
                       <th className="pb-2.5">客户端应用</th>
                       <th className="pb-2.5">分类</th>
-                      <th className="pb-2.5 text-right">近期会话数</th>
+                      <th className="pb-2.5 text-right">会话数</th>
                       <th className="pb-2.5 text-right">总输入 Tokens</th>
                       <th className="pb-2.5 text-right">缓存命中 Tokens</th>
                       <th className="pb-2.5 text-right">缓存命中率</th>
@@ -1527,11 +1555,11 @@ export default function App() {
                         </td>
                         <td className="py-3 text-right font-mono whitespace-nowrap">
                           <span className="font-semibold text-fg-1">
-                            ${t.totalCostUsd !== undefined ? t.totalCostUsd.toFixed(2) : '0.00'}
+                            {formatUsageCost(t.totalCostUsd, t.unpricedCount)}
                           </span>
-                          {t.totalCacheSavingsUsd && t.totalCacheSavingsUsd > 0 ? (
+                          {t.totalCacheSavingsUsd ? (
                             <span className="block text-[10px] text-route-text font-normal">
-                              省 ${t.totalCacheSavingsUsd.toFixed(2)}
+                              缓存净省 ${t.totalCacheSavingsUsd.toFixed(2)}
                             </span>
                           ) : null}
                         </td>
@@ -1600,15 +1628,11 @@ export default function App() {
                   ? dashboard.allDailyActivities || []
                   : targetSum?.dailyActivities || []
                 const targetName = isAll ? '全部 AI 工具' : APP_SHORT_NAMES[usageFilter as TargetId] || usageFilter
-                const cost = isAll ? dashboard.totalCostUsd : targetSum?.totalCostUsd
-                const savings = isAll ? dashboard.totalSavingsUsd : targetSum?.totalCacheSavingsUsd
                 return (
                   <TokenActivityHeatmap
                     activities={activities}
                     title={`Token 活动 (${targetName})`}
                     targetName={targetName}
-                    totalCostUsd={cost}
-                    totalSavingsUsd={savings}
                   />
                 )
               })()}
@@ -1647,10 +1671,14 @@ export default function App() {
                             title={item.title}
                           >
                             {item.title}
+                            {item.detailOnly && <span className="ml-1 text-fg-3" title="总览优先采用该客户端的原生日志">仅明细</span>}
+                            {item.estimated && <span className="ml-1 text-warning-text">估算</span>}
                           </td>
                           <td className="px-4 py-2.5 font-mono text-fg-2">{item.model}</td>
                           <td className="px-4 py-2.5 text-right font-mono text-fg-1">
-                            {formatTokens(item.inputTokens)}
+                            {item.totalTokens > item.inputTokens + item.outputTokens + item.reasoningTokens
+                              ? <span title="日志只有总量">{formatTokens(item.totalTokens)}（总量）</span>
+                              : formatTokens(item.inputTokens)}
                           </td>
                           <td className="px-4 py-2.5 text-right font-mono text-route-text">
                             {formatTokens(item.cachedTokens)}
@@ -1675,17 +1703,17 @@ export default function App() {
                                     `$${item.costUsd.toFixed(3)}`
                                   )}
                                 </span>
-                                {item.costUsd > 0 && item.cacheSavingsUsd && item.cacheSavingsUsd > 0 ? (
+                                {item.cacheSavingsUsd ? (
                                   <span
                                     className="block text-[10px] text-route-text font-normal"
-                                    title={`Prompt 缓存为您节省 $${item.cacheSavingsUsd.toFixed(3)}`}
+                                    title={`缓存净节省 $${item.cacheSavingsUsd.toFixed(3)}`}
                                   >
-                                    省 ${item.cacheSavingsUsd.toFixed(3)}
+                                    净省 ${item.cacheSavingsUsd.toFixed(3)}
                                   </span>
                                 ) : null}
                               </div>
                             ) : (
-                              <span className="text-fg-3">-</span>
+                              <span className="text-fg-3">未计价</span>
                             )}
                           </td>
                           <td className="px-4 py-2.5 text-right font-mono whitespace-nowrap">

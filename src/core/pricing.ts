@@ -2,26 +2,30 @@ export interface ModelPricing {
   inputPerM: number // USD per 1M tokens (fresh input)
   cachePerM: number // USD per 1M tokens (prompt cache read)
   outputPerM: number // USD per 1M tokens (generation & reasoning)
+  writeMultiplier?: number
+  longWriteMultiplier?: number
 }
 
 /**
  * Standard public API pricing catalog (USD per 1 Million Tokens)
- * Reflects latest official rates for OpenAI, DeepSeek, Anthropic, Gemini, Kimi, etc.
+ * Reference rates for standard text usage.
  */
 const PRICING_CATALOG: Record<string, ModelPricing> = {
   // --- OpenAI / Codex ---
-  'gpt-6.1-sol': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
+  'gpt-6.1-sol': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0, writeMultiplier: 1.25, longWriteMultiplier: 2.5 },
   'gpt-6-sol': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
   'gpt-5.6-sol': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
-  'gpt-5.3-codex': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
-  'gpt-5-codex': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
-  'gpt-5': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
-  'gpt-6.1-terra': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
+  'gpt-5.3-codex': { inputPerM: 1.75, cachePerM: 0.175, outputPerM: 14.0 },
+  'gpt-5-codex': { inputPerM: 1.25, cachePerM: 0.125, outputPerM: 10.0 },
+  'gpt-5': { inputPerM: 1.25, cachePerM: 0.125, outputPerM: 10.0 },
+  'gpt-5.4': { inputPerM: 2.5, cachePerM: 0.25, outputPerM: 15.0 },
+  'gpt-5.5': { inputPerM: 5.0, cachePerM: 0.5, outputPerM: 30.0 },
+  'gpt-6.1-terra': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0, writeMultiplier: 1.25, longWriteMultiplier: 2.5 },
   'gpt-6-terra': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
   'gpt-5.6-terra': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
-  'gpt-6-luna': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
+  'gpt-6-luna': { inputPerM: 0.1, cachePerM: 0.01, outputPerM: 0.5, writeMultiplier: 1.25, longWriteMultiplier: 2.5 },
   'gpt-5.6-luna': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
-  'gpt-6-astra': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
+  'gpt-6-astra': { inputPerM: 10.0, cachePerM: 1.0, outputPerM: 50.0, writeMultiplier: 1.25, longWriteMultiplier: 2.5 },
   'gpt-4o': { inputPerM: 2.5, cachePerM: 1.25, outputPerM: 10.0 },
   'gpt-4o-mini': { inputPerM: 0.15, cachePerM: 0.075, outputPerM: 0.6 },
   'o1': { inputPerM: 15.0, cachePerM: 7.5, outputPerM: 60.0 },
@@ -33,25 +37,25 @@ const PRICING_CATALOG: Record<string, ModelPricing> = {
   'deepseek-v3': { inputPerM: 0.14, cachePerM: 0.014, outputPerM: 0.28 },
   'deepseek-reasoner': { inputPerM: 0.55, cachePerM: 0.14, outputPerM: 2.19 },
   'deepseek-r1': { inputPerM: 0.55, cachePerM: 0.14, outputPerM: 2.19 },
-  'deepseek-v4.1-flash': { inputPerM: 0.1, cachePerM: 0.01, outputPerM: 0.2 },
-  'deepseek-flash': { inputPerM: 0.1, cachePerM: 0.01, outputPerM: 0.2 },
+  // Standard peak rates for the current DeepSeek reference deployment.
+  'deepseek-v4.1-flash': { inputPerM: 0.3, cachePerM: 0.006, outputPerM: 1.2 },
+  'deepseek-v4-pro': { inputPerM: 1.32, cachePerM: 0.044, outputPerM: 3.96 },
 
   // --- Anthropic Claude ---
   'claude-3-7-sonnet': { inputPerM: 3.0, cachePerM: 0.3, outputPerM: 15.0 },
   'claude-3-5-sonnet': { inputPerM: 3.0, cachePerM: 0.3, outputPerM: 15.0 },
   'claude-3-5-haiku': { inputPerM: 0.8, cachePerM: 0.08, outputPerM: 4.0 },
   'claude-3-opus': { inputPerM: 15.0, cachePerM: 1.5, outputPerM: 75.0 },
-  'claude-opus-5.5': { inputPerM: 15.0, cachePerM: 1.5, outputPerM: 75.0 },
-  'claude-opus-5': { inputPerM: 15.0, cachePerM: 1.5, outputPerM: 75.0 },
+  'claude-opus-5.5': { inputPerM: 4.0, cachePerM: 0.2, outputPerM: 20.0 },
+  'claude-opus-5': { inputPerM: 5.0, cachePerM: 0.5, outputPerM: 25.0 },
 
   // --- Google Gemini ---
-  'gemini-4-argon': { inputPerM: 1.25, cachePerM: 0.3125, outputPerM: 5.0 },
+  'gemini-4-argon': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
   'gemini-2.5-pro': { inputPerM: 1.25, cachePerM: 0.3125, outputPerM: 5.0 },
   'gemini-1.5-pro': { inputPerM: 1.25, cachePerM: 0.3125, outputPerM: 5.0 },
-  'gemini-3.8-flash': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
-  'gemini-3.8': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
-  'gemini-3-flash': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
-  'gemini-2.5-flash': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
+  'gemini-3.8-flash': { inputPerM: 0.75, cachePerM: 0.075, outputPerM: 3.75 },
+  'gemini-3-flash-preview': { inputPerM: 0.5, cachePerM: 0.05, outputPerM: 3.0 },
+  'gemini-2.5-flash': { inputPerM: 0.3, cachePerM: 0.03, outputPerM: 2.5 },
   'gemini-2.0-flash': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
   'gemini-1.5-flash': { inputPerM: 0.075, cachePerM: 0.01875, outputPerM: 0.3 },
 
@@ -69,60 +73,31 @@ const PRICING_CATALOG: Record<string, ModelPricing> = {
   'qwen-max': { inputPerM: 0.28, cachePerM: 0.05, outputPerM: 0.84 },
   'qwen-plus': { inputPerM: 0.11, cachePerM: 0.02, outputPerM: 0.28 },
   'qwen-flash': { inputPerM: 0.02, cachePerM: 0.005, outputPerM: 0.06 },
+  // Model Studio global list prices, with cache ratios from the model's rate card.
+  'qwen3.8-flash': { inputPerM: 0.113, cachePerM: 0.113 * 0.125, outputPerM: 0.382, writeMultiplier: 1.5625 },
   'glm-5': { inputPerM: 0.15, cachePerM: 0.05, outputPerM: 0.5 },
   'mimo-v2.5-pro': { inputPerM: 0.1, cachePerM: 0.02, outputPerM: 0.2 },
   'step-5': { inputPerM: 0.4, cachePerM: 0.1, outputPerM: 1.2 }
 }
 
-const DEFAULT_FALLBACK_PRICING: ModelPricing = {
-  inputPerM: 1.0,
-  cachePerM: 0.25,
-  outputPerM: 3.0
+const MODEL_ALIASES: Record<string, string> = {
+  'claude-opus-5-5': 'claude-opus-5.5',
+  'gemini-3-flash': 'gemini-3-flash-preview',
+  'deepseek-flash': 'deepseek-v4.1-flash',
+  'deepseek-v4-flash': 'deepseek-v4.1-flash',
+  'deepseek-v4-flash-vision-exp': 'deepseek-v4.1-flash'
 }
 
-export function getModelPricing(modelName: string): ModelPricing {
-  const norm = (modelName || '').toLowerCase().trim()
-  if (!norm) return DEFAULT_FALLBACK_PRICING
+function modelKey(modelName: string): string {
+  const normalized = modelName.toLowerCase().trim().replace(/\s+/g, '-').split(/[/:]/).at(-1) || ''
+  const base = normalized.replace(/-\d{4}(?:-\d{2}-\d{2})?$/, '')
+  if (Object.hasOwn(PRICING_CATALOG, normalized)) return normalized
+  return Object.hasOwn(MODEL_ALIASES, base) ? MODEL_ALIASES[base] : base
+}
 
-  // Direct match
-  if (PRICING_CATALOG[norm]) return PRICING_CATALOG[norm]
-
-  // Fuzzy prefix/token matching
-  if (norm.includes('auto-review') || norm.includes('review') || norm.includes('guardian')) {
-    return PRICING_CATALOG['codex-auto-review']
-  }
-  if (norm.includes('sol')) return PRICING_CATALOG['gpt-6.1-sol']
-  if (norm.includes('terra') || norm.includes('luna') || norm.includes('astra')) return PRICING_CATALOG['gpt-6.1-terra']
-  if (norm.includes('o1')) return PRICING_CATALOG['o1']
-  if (norm.includes('o3')) return PRICING_CATALOG['o3-mini']
-  if (norm.includes('gpt-5') || norm.includes('gpt-codex')) return PRICING_CATALOG['gpt-5-codex']
-  if (norm.includes('gpt-4o-mini')) return PRICING_CATALOG['gpt-4o-mini']
-  if (norm.includes('gpt-4o')) return PRICING_CATALOG['gpt-4o']
-
-  if (norm.includes('r1') || norm.includes('reasoner')) return PRICING_CATALOG['deepseek-reasoner']
-  if (norm.includes('flash') && norm.includes('deepseek')) return PRICING_CATALOG['deepseek-v4.1-flash']
-  if (norm.includes('deepseek')) return PRICING_CATALOG['deepseek-chat']
-
-  if (norm.includes('sonnet')) return PRICING_CATALOG['claude-3-7-sonnet']
-  if (norm.includes('haiku')) return PRICING_CATALOG['claude-3-5-haiku']
-  if (norm.includes('opus')) return PRICING_CATALOG['claude-opus-5.5'] || PRICING_CATALOG['claude-3-opus']
-
-  if (norm.includes('argon')) return PRICING_CATALOG['gemini-4-argon']
-  if (norm.includes('3.8') || norm.includes('3-flash')) return PRICING_CATALOG['gemini-3.8-flash']
-  if (norm.includes('flash') && norm.includes('gemini')) return PRICING_CATALOG['gemini-3.8-flash']
-  if (norm.includes('pro') && norm.includes('gemini')) return PRICING_CATALOG['gemini-2.5-pro']
-  if (norm.includes('gemini')) return PRICING_CATALOG['gemini-3.8-flash']
-
-  if (norm.includes('kimi') || norm.includes('moonshot')) return PRICING_CATALOG['kimi-k3.1-pro']
-  if (norm.includes('free') || norm.includes('hy4')) return PRICING_CATALOG['hy4-free']
-  if (norm.includes('hunyuan')) return PRICING_CATALOG['hunyuan-pro']
-
-  if (norm.includes('qwen') || norm.includes('tongyi')) return PRICING_CATALOG['qwen-flash']
-  if (norm.includes('glm')) return PRICING_CATALOG['glm-5']
-  if (norm.includes('mimo')) return PRICING_CATALOG['mimo-v2.5-pro']
-  if (norm.includes('step')) return PRICING_CATALOG['step-5']
-
-  return DEFAULT_FALLBACK_PRICING
+export function getModelPricing(modelName: string): ModelPricing | undefined {
+  const key = modelKey(modelName)
+  return Object.hasOwn(PRICING_CATALOG, key) ? PRICING_CATALOG[key] : undefined
 }
 
 export function calculateCost(
@@ -130,22 +105,25 @@ export function calculateCost(
   inputTokens: number,
   cachedTokens: number,
   outputTokens: number,
-  reasoningTokens = 0
-): { costUsd: number; savingsUsd: number } {
+  reasoningTokens = 0,
+  cacheWriteTokens = 0,
+  longCacheWriteTokens = 0
+): { costUsd?: number; savingsUsd?: number } {
   const p = getModelPricing(modelName)
-  const safeCached = Math.min(inputTokens, Math.max(0, cachedTokens))
-  const freshInput = Math.max(0, inputTokens - safeCached)
-  const totalGen = Math.max(0, outputTokens + reasoningTokens)
+  if (!p) return {}
 
-  const rawCost =
-    (freshInput / 1_000_000) * p.inputPerM +
-    (safeCached / 1_000_000) * p.cachePerM +
-    (totalGen / 1_000_000) * p.outputPerM
-
-  const savings = (safeCached / 1_000_000) * Math.max(0, p.inputPerM - p.cachePerM)
-
+  const cacheRead = Math.min(inputTokens, cachedTokens)
+  const cacheWrite = Math.min(inputTokens - cacheRead, cacheWriteTokens)
+  const longWrite = Math.min(cacheWrite, longCacheWriteTokens)
+  const freshInput = inputTokens - cacheRead - cacheWrite
+  const isClaude = modelKey(modelName).startsWith('claude-')
+  const writeRate = p.inputPerM * (p.writeMultiplier ?? (isClaude ? 1.25 : 1))
+  const longWriteRate = p.inputPerM * (p.longWriteMultiplier ?? (isClaude ? 2 : p.writeMultiplier ?? 1))
+  const inputCost =
+    freshInput * p.inputPerM + cacheRead * p.cachePerM +
+    (cacheWrite - longWrite) * writeRate + longWrite * longWriteRate
   return {
-    costUsd: Number(rawCost.toFixed(4)),
-    savingsUsd: Number(savings.toFixed(4))
+    costUsd: (inputCost + (outputTokens + reasoningTokens) * p.outputPerM) / 1_000_000,
+    savingsUsd: (inputTokens * p.inputPerM - inputCost) / 1_000_000
   }
 }

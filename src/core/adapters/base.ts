@@ -20,14 +20,6 @@ export abstract class BaseTargetAdapter {
   abstract applyProvider(provider: ProviderProfile, useProxy: boolean, proxyPort: number): void
   abstract syncMcps(mcps: UnifiedMcpServer[]): void
   abstract syncSkills(skills: UnifiedSkill[], hubDir: string): void
-
-  protected calcCacheHitRate(inputTokens: number, cachedTokens: number, cacheWriteTokens = 0): number {
-    // Note: In OpenAI/Codex/WorkBuddy, input_tokens or prompt_tokens already includes cached_tokens,
-    // or in OpenCode tokens_input is fresh input while tokens_cache_read is separate.
-    const denominator = Math.max(inputTokens, cachedTokens + cacheWriteTokens)
-    if (denominator <= 0) return 0
-    return Math.min(100, Number(((cachedTokens / denominator) * 100).toFixed(1)))
-  }
 }
 
 export abstract class DesktopTargetAdapter extends BaseTargetAdapter {

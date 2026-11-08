@@ -253,7 +253,7 @@ function migrate(raw: any): AppDatabase {
     mcps: raw.mcps || [],
     skillsHubPath: raw.skillsHubPath || DEFAULT_SKILLS_HUB,
     skills: Array.isArray(raw.skills) ? raw.skills : [],
-    proxyUsageLogs: raw.proxyUsageLogs || []
+    proxyUsageLogs: Array.isArray(raw.proxyUsageLogs) ? raw.proxyUsageLogs : []
   }
 }
 

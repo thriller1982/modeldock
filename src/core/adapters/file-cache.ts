@@ -8,17 +8,24 @@ import fs from 'node:fs'
 export class FileParseCache<T> {
   private entries = new Map<string, { mtimeMs: number; size: number; value: T }>()
 
-  get(filePath: string, parse: (content: string) => T): T | null {
+  get(filePath: string, parse: (content: string, mtimeMs: number) => T, context = ''): T | null {
     let st: fs.Stats
     try {
       st = fs.statSync(filePath)
     } catch {
       return null
     }
-    const hit = this.entries.get(filePath)
+    const key = filePath + '\0' + context
+    const hit = this.entries.get(key)
     if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.value
-    const value = parse(fs.readFileSync(filePath, 'utf8'))
-    this.entries.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, value })
+    let content: string
+    try {
+      content = fs.readFileSync(filePath, 'utf8')
+    } catch {
+      return null
+    }
+    const value = parse(content, st.mtimeMs)
+    this.entries.set(key, { mtimeMs: st.mtimeMs, size: st.size, value })
     return value
   }
 }

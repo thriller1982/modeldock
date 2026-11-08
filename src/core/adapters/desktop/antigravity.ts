@@ -4,7 +4,6 @@ import os from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { DesktopTargetAdapter } from '../base'
 import {
-  DailyActivityItem,
   ProviderProfile,
   SessionUsageItem,
   TargetId,
@@ -14,6 +13,8 @@ import {
   UnifiedSkill
 } from '../../types'
 import { calculateCost } from '../../pricing'
+import { cacheHitRate, summarizeUsage, tokenCount } from '../../usage'
+import { FileParseCache } from '../file-cache'
 
 function extractModelFromStep(content: string): string | null {
   if (!content) return null
@@ -29,11 +30,24 @@ function extractModelFromStep(content: string): string | null {
   return null
 }
 
+interface TranscriptUsage {
+  model: string
+  inputTokens: number
+  cachedTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  estimated: boolean
+  durationMs?: number
+  outputTokensPerSec?: number
+}
+
 export class AntigravityAdapter extends DesktopTargetAdapter {
   readonly id: TargetId = 'antigravity'
   readonly name = 'Google Antigravity (反重力桌面版)'
   readonly description = 'Google DeepMind Antigravity 2.0 桌面端 (~/.gemini/antigravity)'
   readonly processNames = ['Antigravity.exe', 'agy.exe']
+
+  private usageCache = new FileParseCache<TranscriptUsage[]>()
 
   private get agyDir(): string {
     return path.join(os.homedir(), '.gemini', 'antigravity')
@@ -152,336 +166,118 @@ export class AntigravityAdapter extends DesktopTargetAdapter {
     }
   }
 
-  getUsageSummary(limit = 30): TargetUsageSummary {
-    const recentSessions: SessionUsageItem[] = []
-    let inputTokens = 0
-    let cachedTokens = 0
-    let outputTokens = 0
-    let reasoningTokens = 0
-    let totalTokens = 0
-    let dailyActivities: DailyActivityItem[] = []
+  private readTranscriptUsage(transcript: string): TranscriptUsage[] {
+    let model = 'Gemini 3.8 Flash'
+    let contextLength = 0
+    let previousResponseAt = 0
+    const usage = new Map<string, TranscriptUsage>()
 
-    if (fs.existsSync(this.summariesDbPath)) {
+    for (const line of transcript.split('\n')) {
+      if (!line.trim()) continue
+      let step
       try {
-        const db = new DatabaseSync(this.summariesDbPath, { open: true, readOnly: true })
-        const rows = db
-          .prepare(
-            `SELECT conversation_id, title, step_count, last_modified_time
-             FROM conversation_summaries
-             ORDER BY last_modified_time DESC
-             LIMIT ?`
-          )
-          .all(limit) as any[]
-        db.close()
+        step = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (step?.source === 'USER_EXPLICIT' || step?.type === 'USER_INPUT') {
+        const content = String(step.content || '')
+        model = extractModelFromStep(content) ?? model
+        contextLength += content.length
+      }
+      if (step?.type !== 'PLANNER_RESPONSE') continue
 
-        for (const r of rows) {
-          const convId = String(r.conversation_id)
-          const transcriptPath = path.join(
-            this.brainDir,
-            convId,
-            '.system_generated',
-            'logs',
-            'transcript.jsonl'
-          )
+      model = typeof step.model === 'string' && step.model ? step.model : model
+      const responseAt = new Date(step.created_at).getTime()
+      const outputLength = String(step.content || '').length + JSON.stringify(step.tool_calls || []).length
+      const reasoningLength = String(step.thinking || '').length
+      const reportedInput = step.input_tokens != null
+      const reportedOutput = step.output_tokens != null
+      const estimatedInput = Math.max(2500, Math.ceil(contextLength / 3.5))
+      const cached = reportedInput ? tokenCount(step.cache_read_tokens)
+        : contextLength > 4000 ? Math.floor(estimatedInput * 0.86) : 0
+      const input = reportedInput ? tokenCount(step.input_tokens) + cached : estimatedInput
+      const output = reportedOutput ? tokenCount(step.output_tokens) : Math.ceil(outputLength / 3.5)
+      const reasoning = step.reasoning_tokens == null ? Math.ceil(reasoningLength / 3.5) : tokenCount(step.reasoning_tokens)
 
-          let curModel = 'Gemini 3.8 Flash'
-          let cumulativeContextChars = 0
-          let prevStepTs = 0
+      let bucket = usage.get(model)
+      if (!bucket) {
+        bucket = { model, inputTokens: 0, cachedTokens: 0, outputTokens: 0, reasoningTokens: 0, estimated: false }
+        usage.set(model, bucket)
+      }
+      bucket.inputTokens += input
+      bucket.cachedTokens += cached
+      bucket.outputTokens += output
+      bucket.reasoningTokens += reasoning
+      bucket.estimated ||= !reportedInput || !reportedOutput || (step.reasoning_tokens == null && reasoningLength > 0)
+      const duration = responseAt - previousResponseAt
+      if (previousResponseAt > 0 && duration >= 300 && duration < 120_000 && output > 0) {
+        bucket.durationMs = duration
+        bucket.outputTokensPerSec = Number(((output / duration) * 1000).toFixed(1))
+      }
+      if (responseAt > 0) previousResponseAt = responseAt
+      contextLength += outputLength + reasoningLength + 400
+    }
 
-          const byModel = new Map<
-            string,
-            {
-              model: string
-              inTok: number
-              cacheTok: number
-              outTok: number
-              reasoningTok: number
-              turns: number
-              sDurationMs: number
-              lastTurnDurMs: number
-              lastTurnTok: number
-            }
-          >()
+    return Array.from(usage.values())
+  }
 
-          if (fs.existsSync(transcriptPath)) {
-            try {
-              const lines = fs.readFileSync(transcriptPath, 'utf8').split('\n').filter(Boolean)
-              for (const line of lines) {
-                const step = JSON.parse(line)
-                if (step.source === 'USER_EXPLICIT' || step.type === 'USER_INPUT') {
-                  const detected = extractModelFromStep(step.content)
-                  if (detected) curModel = detected
-                }
+  getUsageSummary(limit = 30): TargetUsageSummary {
+    const items: SessionUsageItem[] = []
+    if (!fs.existsSync(this.summariesDbPath)) return summarizeUsage(this, items, limit)
 
-                if (step.type === 'PLANNER_RESPONSE') {
-                  const stepTs = step.created_at ? new Date(step.created_at).getTime() : 0
-                  const contentLen = String(step.content || '').length
-                  const thinkingLen = String(step.thinking || '').length
-                  const toolLen = JSON.stringify(step.tool_calls || []).length
-
-                  const hasRealTokens = step.input_tokens !== undefined
-                  let stepFreshIn = 0
-                  let stepCacheIn = 0
-                  let stepOut = 0
-                  let stepReason = Math.ceil(thinkingLen / 3.5)
-
-                  if (hasRealTokens) {
-                    stepFreshIn = step.input_tokens || 0
-                    stepCacheIn = step.cache_read_tokens || 0
-                    stepOut = step.output_tokens || 0
-                  } else {
-                    const estIn = Math.max(2500, Math.ceil(cumulativeContextChars / 3.5))
-                    stepCacheIn = cumulativeContextChars > 4000 ? Math.floor(estIn * 0.86) : 0
-                    stepFreshIn = estIn - stepCacheIn
-                    stepOut = Math.ceil((contentLen + toolLen) / 3.5)
-                  }
-
-                  const stepInTotal = stepFreshIn + stepCacheIn
-
-                  let turnDelta = 0
-                  if (stepTs > 0 && prevStepTs > 0) {
-                    const delta = stepTs - prevStepTs
-                    if (delta >= 300 && delta < 120_000) {
-                      turnDelta = delta
-                    }
-                  }
-                  if (stepTs > 0) prevStepTs = stepTs
-                  cumulativeContextChars += contentLen + thinkingLen + toolLen + 400
-
-                  if (!byModel.has(curModel)) {
-                    byModel.set(curModel, {
-                      model: curModel,
-                      inTok: 0,
-                      cacheTok: 0,
-                      outTok: 0,
-                      reasoningTok: 0,
-                      turns: 0,
-                      sDurationMs: 0,
-                      lastTurnDurMs: 0,
-                      lastTurnTok: 0
-                    })
-                  }
-                  const b = byModel.get(curModel)!
-                  b.turns++
-                  b.inTok += stepInTotal
-                  b.cacheTok += stepCacheIn
-                  b.outTok += stepOut
-                  b.reasoningTok += stepReason
-                  if (turnDelta > 0) {
-                    b.sDurationMs += turnDelta
-                    b.lastTurnDurMs = turnDelta
-                    b.lastTurnTok = stepOut + stepReason
-                  }
-                }
-              }
-            } catch {
-              // ignore
-            }
-          }
-
-          if (byModel.size === 0 && Number(r.step_count) > 0) {
-            const steps = Number(r.step_count)
-            const inTok = steps * 6400
-            const cacheTok = Math.floor(inTok * 0.82)
-            const outTok = steps * 380
-            const reasoningTok = steps * 210
-            byModel.set(curModel, {
-              model: curModel,
-              inTok,
-              cacheTok,
-              outTok,
-              reasoningTok,
-              turns: steps,
-              sDurationMs: 0,
-              lastTurnDurMs: 0,
-              lastTurnTok: 0
-            })
-          }
-
-          const multiModel = byModel.size > 1
-          for (const b of byModel.values()) {
-            const sTot = b.inTok + b.outTok + b.reasoningTok
-            if (sTot <= 0) continue
-
-            inputTokens += b.inTok
-            cachedTokens += b.cacheTok
-            outputTokens += b.outTok
-            reasoningTokens += b.reasoningTok
-            totalTokens += sTot
-
-            const hitRate = b.inTok > 0 ? Number(((b.cacheTok / b.inTok) * 100).toFixed(1)) : 0
-            const genTokens = b.outTok + b.reasoningTok
-            const outputTokensPerSec =
-              b.lastTurnDurMs >= 300 && b.lastTurnTok > 0
-                ? Number(((b.lastTurnTok / b.lastTurnDurMs) * 1000).toFixed(1))
-                : b.sDurationMs > 300 && genTokens > 0
-                ? Number(((genTokens / b.sDurationMs) * 1000).toFixed(1))
-                : undefined
-
+    try {
+      const db = new DatabaseSync(this.summariesDbPath, { readOnly: true })
+      try {
+        const rows = db.prepare(
+          'SELECT conversation_id, title, step_count, last_modified_time FROM conversation_summaries'
+        ).all() as { conversation_id: string; title: string; step_count: number; last_modified_time: string }[]
+        for (const row of rows) {
+          const id = row.conversation_id
+          const transcriptPath = path.join(this.brainDir, id, '.system_generated', 'logs', 'transcript.jsonl')
+          const parsed = this.usageCache.get(transcriptPath, (content) => this.readTranscriptUsage(content))
+          const steps = tokenCount(row.step_count)
+          const buckets = parsed?.length ? parsed : steps > 0 ? [{
+            model: 'Gemini 3.8 Flash',
+            inputTokens: steps * 6400,
+            cachedTokens: Math.floor(steps * 6400 * 0.82),
+            outputTokens: steps * 380,
+            reasoningTokens: steps * 210,
+            estimated: true
+          }] : []
+          for (const usage of buckets) {
+            const totalTokens = usage.inputTokens + usage.outputTokens + usage.reasoningTokens
+            if (totalTokens <= 0) continue
             const { costUsd, savingsUsd } = calculateCost(
-              b.model,
-              b.inTok,
-              b.cacheTok,
-              b.outTok,
-              b.reasoningTok
+              usage.model, usage.inputTokens, usage.cachedTokens, usage.outputTokens, usage.reasoningTokens
             )
-
-            const baseTitle = r.title || `Conversation ${convId.slice(0, 8)}`
-            const title = multiModel ? `${baseTitle} (${b.model})` : baseTitle
-
-            recentSessions.push({
-              id: multiModel
-                ? `${convId}-${b.model.toLowerCase().replace(/[^a-z0-9]/g, '-')}`
-                : convId,
+            const title = row.title || 'Antigravity Session'
+            items.push({
+              ...usage,
+              id: buckets.length > 1 ? id + '_' + usage.model : id,
+              sessionId: id,
               targetId: this.id,
               targetName: this.name,
               category: this.category,
-              title,
-              model: b.model,
+              title: buckets.length > 1 ? title + ' (' + usage.model + ')' : title,
               provider: 'Google DeepMind',
-              inputTokens: b.inTok,
-              cachedTokens: b.cacheTok,
               cacheWriteTokens: 0,
-              outputTokens: b.outTok,
-              reasoningTokens: b.reasoningTok,
-              totalTokens: sTot,
-              cacheHitRate: hitRate,
-              outputTokensPerSec,
-              durationMs: b.lastTurnDurMs > 0 ? b.lastTurnDurMs : undefined,
+              totalTokens,
+              cacheHitRate: cacheHitRate(usage.inputTokens, usage.cachedTokens),
               costUsd,
               cacheSavingsUsd: savingsUsd,
-              updatedAt: new Date(r.last_modified_time || Date.now()).getTime(),
-              source: 'native-log',
-              estimated: false
+              updatedAt: new Date(row.last_modified_time).getTime(),
+              source: 'native-log'
             })
           }
         }
-
-        // Daily activity aggregation
-        try {
-          const dailyMap = new Map<string, DailyActivityItem>()
-          for (const s of recentSessions) {
-            const dateStr = new Date(s.updatedAt).toISOString().slice(0, 10)
-            if (!dailyMap.has(dateStr)) {
-              dailyMap.set(dateStr, {
-                date: dateStr,
-                totalTokens: 0,
-                inputTokens: 0,
-                cachedTokens: 0,
-                outputTokens: 0,
-                reasoningTokens: 0,
-                sessionCount: 0,
-                costUsd: 0,
-                cacheSavingsUsd: 0
-              })
-            }
-            const item = dailyMap.get(dateStr)!
-            item.totalTokens += s.totalTokens
-            item.inputTokens += s.inputTokens
-            item.cachedTokens += s.cachedTokens
-            item.outputTokens += s.outputTokens
-            item.reasoningTokens += s.reasoningTokens
-            item.sessionCount += 1
-            item.costUsd = Number(((item.costUsd || 0) + (s.costUsd || 0)).toFixed(3))
-            item.cacheSavingsUsd = Number(
-              ((item.cacheSavingsUsd || 0) + (s.cacheSavingsUsd || 0)).toFixed(3)
-            )
-          }
-
-          const dailyRows = db
-            .prepare(
-              `SELECT substr(last_modified_time, 1, 10) as day,
-                      COUNT(*) as sessionCount,
-                      SUM(step_count) as totalSteps
-               FROM conversation_summaries
-               WHERE step_count > 0 AND length(last_modified_time) >= 10
-               GROUP BY day
-               ORDER BY day ASC`
-            )
-            .all() as any[]
-
-          for (const dr of dailyRows) {
-            const day = String(dr.day)
-            if (!dailyMap.has(day)) {
-              const steps = Number(dr.totalSteps || 0)
-              const inTok = steps * 6400
-              const cacheTok = Math.floor(inTok * 0.82)
-              const outTok = steps * 380
-              const reasonTok = steps * 210
-              const tot = inTok + outTok + reasonTok
-              const { costUsd, savingsUsd } = calculateCost(
-                'Gemini 3.8 Flash',
-                inTok,
-                cacheTok,
-                outTok,
-                reasonTok
-              )
-              dailyMap.set(day, {
-                date: day,
-                totalTokens: tot,
-                inputTokens: inTok,
-                cachedTokens: cacheTok,
-                outputTokens: outTok,
-                reasoningTokens: reasonTok,
-                sessionCount: Number(dr.sessionCount || 0),
-                costUsd,
-                cacheSavingsUsd: savingsUsd
-              })
-            }
-          }
-
-          dailyActivities = Array.from(dailyMap.values()).sort((a, b) =>
-            a.date.localeCompare(b.date)
-          )
-        } catch {
-          // ignore
-        }
-      } catch {
-        // ignore
+      } finally {
+        db.close()
       }
+    } catch {
+      // The client database can be temporarily unavailable.
     }
-
-    const cacheHitRate = inputTokens > 0 ? Number(((cachedTokens / inputTokens) * 100).toFixed(1)) : 0
-    const speedSessions = recentSessions.filter((s) => s.outputTokensPerSec && s.outputTokensPerSec > 0)
-    const latestWithSpeed = speedSessions[0]
-    const avgOutputTokensPerSec =
-      speedSessions.length > 0
-        ? Number(
-            (
-              speedSessions.reduce((acc, s) => acc + (s.outputTokensPerSec || 0), 0) /
-              speedSessions.length
-            ).toFixed(1)
-          )
-        : undefined
-
-    const totalCostUsd = Number(
-      recentSessions.reduce((acc, s) => acc + (s.costUsd || 0), 0).toFixed(2)
-    )
-    const totalCacheSavingsUsd = Number(
-      recentSessions.reduce((acc, s) => acc + (s.cacheSavingsUsd || 0), 0).toFixed(2)
-    )
-
-    return {
-      targetId: this.id,
-      targetName: this.name,
-      category: this.category,
-      sessionCount: recentSessions.length,
-      inputTokens,
-      cachedTokens,
-      cacheWriteTokens: 0,
-      outputTokens,
-      reasoningTokens,
-      totalTokens,
-      cacheHitRate,
-      latestOutputTokensPerSec: latestWithSpeed?.outputTokensPerSec,
-      latestDurationMs: latestWithSpeed?.durationMs,
-      avgOutputTokensPerSec,
-      totalCostUsd,
-      totalCacheSavingsUsd,
-      dailyActivities,
-      recentSessions,
-      estimated: true
-    }
+    return summarizeUsage(this, items, limit)
   }
 
   applyProvider(_provider: ProviderProfile, _useProxy: boolean, _proxyPort: number): void {

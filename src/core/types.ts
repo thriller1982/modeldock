@@ -47,10 +47,12 @@ export interface DailyActivityItem {
   sessionCount: number
   costUsd: number
   cacheSavingsUsd: number
+  unpricedCount: number
 }
 
 export interface SessionUsageItem {
   id: string
+  sessionId?: string
   targetId: TargetId
   targetName: string
   category: TargetCategory
@@ -60,6 +62,7 @@ export interface SessionUsageItem {
   inputTokens: number
   cachedTokens: number
   cacheWriteTokens: number
+  /** Output excluding the separately tracked reasoning tokens. */
   outputTokens: number
   reasoningTokens: number
   totalTokens: number
@@ -74,6 +77,10 @@ export interface SessionUsageItem {
   cacheSavingsUsd?: number
   updatedAt: number
   source: 'native-log' | 'local-proxy'
+  /** Native session coverage takes precedence over gateway details in totals. */
+  detailOnly?: boolean
+  /** Gateway records with separately counted output and reasoning. */
+  usageVersion?: 2
   /** true when token numbers are estimated (e.g. from transcript length) rather than reported by the API */
   estimated?: boolean
 }
@@ -100,6 +107,7 @@ export interface TargetUsageSummary {
   totalCostUsd?: number
   /** Total savings from prompt caching in USD */
   totalCacheSavingsUsd?: number
+  unpricedCount: number
   /** Daily activity aggregation for heatmap/calendar */
   dailyActivities?: DailyActivityItem[]
   recentSessions: SessionUsageItem[]
@@ -140,6 +148,7 @@ export interface TargetStatus {
 export interface DashboardSnapshot {
   totalInputTokens: number
   totalCachedTokens: number
+  totalCacheWriteTokens: number
   totalOutputTokens: number
   totalReasoningTokens: number
   overallCacheHitRate: number
@@ -148,6 +157,7 @@ export interface DashboardSnapshot {
   totalCostUsd?: number
   /** Total cache savings in USD across all targets */
   totalSavingsUsd?: number
+  unpricedCount: number
   /** Daily activity aggregation across all AI tools combined */
   allDailyActivities?: DailyActivityItem[]
   proxyRunning: boolean

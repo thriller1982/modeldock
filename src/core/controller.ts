@@ -4,7 +4,10 @@ import os from 'node:os'
 import { registry } from './adapters'
 import { loadStore, saveStore, AppDatabase, DEFAULT_SKILLS_HUB, BACKUP_DIR } from './store/app-store'
 import { usageProxy } from './proxy/usage-proxy'
+import { calculateCost } from './pricing'
+import { cacheHitRate, summarizeUsage, tokenCount } from './usage'
 import {
+  DailyActivityItem,
   DashboardSnapshot,
   ProviderProfile,
   SessionUsageItem,
@@ -57,6 +60,31 @@ function countFolderFiles(dir: string): number {
   return count
 }
 
+function readGatewayUsage(item: SessionUsageItem): SessionUsageItem {
+  if (item.usageVersion === 2) return item
+  const inputTokens = tokenCount(item.inputTokens)
+  const cachedTokens = Math.min(inputTokens, tokenCount(item.cachedTokens))
+  const cacheWriteTokens = Math.min(inputTokens - cachedTokens, tokenCount(item.cacheWriteTokens))
+  const generated = tokenCount(item.outputTokens)
+  const reasoningTokens = Math.min(generated, tokenCount(item.reasoningTokens))
+  const outputTokens = generated - reasoningTokens
+  const price = calculateCost(item.model || 'unknown', inputTokens, cachedTokens, outputTokens, reasoningTokens, cacheWriteTokens)
+  return {
+    ...item,
+    inputTokens,
+    cachedTokens,
+    cacheWriteTokens,
+    outputTokens,
+    reasoningTokens,
+    totalTokens: inputTokens + generated,
+    cacheHitRate: cacheHitRate(inputTokens, cachedTokens),
+    costUsd: price.costUsd,
+    cacheSavingsUsd: price.savingsUsd,
+    outputTokensPerSec: undefined,
+    estimated: true
+  }
+}
+
 export class CoreController {
   async init(): Promise<void> {
     const store = loadStore()
@@ -65,108 +93,64 @@ export class CoreController {
 
   getDashboardSnapshot(): DashboardSnapshot {
     const store = loadStore()
-    const adapters = registry.getAll()
-    const byTarget = adapters.map((adapter) => {
-      const summary = adapter.getUsageSummary(50)
-      // Merge proxy usage logs belonging to this target
-      const proxyLogs = (store.proxyUsageLogs || []).filter((l) => l.targetId === adapter.id)
-      for (const pl of proxyLogs) {
-        summary.inputTokens += pl.inputTokens
-        summary.cachedTokens += pl.cachedTokens
-        summary.cacheWriteTokens += pl.cacheWriteTokens
-        summary.outputTokens += pl.outputTokens
-        summary.reasoningTokens += pl.reasoningTokens
-        summary.totalTokens += pl.totalTokens
-        summary.sessionCount += 1
+    const byTarget = registry.getAll().map((adapter) => {
+      const native = adapter.getUsageSummary(50)
+      const gateway = store.proxyUsageLogs
+        .filter((item) => item?.targetId === adapter.id)
+        .map(readGatewayUsage)
+      if (native.sessionCount === 0) return summarizeUsage(adapter, gateway, 50)
+
+      // The clients and older gateway logs lack a common request ID. Use one source for totals.
+      const details = gateway.map((item) => ({ ...item, detailOnly: true }))
+      return {
+        ...native,
+        recentSessions: [...native.recentSessions, ...details]
+          .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 50)
       }
-      summary.recentSessions = [...proxyLogs, ...summary.recentSessions]
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-        .slice(0, 50)
-      summary.cacheHitRate =
-        summary.inputTokens > 0
-          ? Number(((summary.cachedTokens / summary.inputTokens) * 100).toFixed(1))
-          : 0
-      const speedSessions = summary.recentSessions.filter(
-        (s) => s.outputTokensPerSec && s.outputTokensPerSec > 0
-      )
-      if (speedSessions.length > 0) {
-        summary.latestOutputTokensPerSec = speedSessions[0].outputTokensPerSec
-        summary.latestDurationMs = speedSessions[0].durationMs
-        summary.avgOutputTokensPerSec = Number(
-          (
-            speedSessions.reduce((acc, s) => acc + (s.outputTokensPerSec || 0), 0) /
-            speedSessions.length
-          ).toFixed(1)
-        )
-      }
-      return summary
     })
 
-    let totalInputTokens = 0
-    let totalCachedTokens = 0
-    let totalOutputTokens = 0
-    let totalReasoningTokens = 0
-    let totalSessions = 0
-    let totalCostUsd = 0
-    let totalSavingsUsd = 0
-    const allStream: SessionUsageItem[] = []
-
-    const dailyMap = new Map<string, any>()
-
-    for (const t of byTarget) {
-      totalInputTokens += t.inputTokens
-      totalCachedTokens += t.cachedTokens
-      totalOutputTokens += t.outputTokens
-      totalReasoningTokens += t.reasoningTokens
-      totalSessions += t.sessionCount
-      totalCostUsd += t.totalCostUsd || 0
-      totalSavingsUsd += t.totalCacheSavingsUsd || 0
-      allStream.push(...t.recentSessions)
-
-      for (const d of t.dailyActivities || []) {
-        const existing = dailyMap.get(d.date)
-        if (existing) {
-          existing.totalTokens += d.totalTokens
-          existing.inputTokens += d.inputTokens
-          existing.cachedTokens += d.cachedTokens
-          existing.outputTokens += d.outputTokens
-          existing.reasoningTokens += d.reasoningTokens
-          existing.sessionCount += d.sessionCount
-          existing.costUsd = Number((existing.costUsd + (d.costUsd || 0)).toFixed(4))
-          existing.cacheSavingsUsd = Number(
-            (existing.cacheSavingsUsd + (d.cacheSavingsUsd || 0)).toFixed(4)
-          )
-        } else {
-          dailyMap.set(d.date, { ...d })
+    const dailyMap = new Map<string, DailyActivityItem>()
+    for (const target of byTarget) {
+      for (const day of target.dailyActivities ?? []) {
+        const current = dailyMap.get(day.date)
+        if (!current) {
+          dailyMap.set(day.date, { ...day })
+          continue
         }
+        current.totalTokens += day.totalTokens
+        current.inputTokens += day.inputTokens
+        current.cachedTokens += day.cachedTokens
+        current.outputTokens += day.outputTokens
+        current.reasoningTokens += day.reasoningTokens
+        current.sessionCount += day.sessionCount
+        current.costUsd += day.costUsd
+        current.cacheSavingsUsd += day.cacheSavingsUsd
+        current.unpricedCount += day.unpricedCount
       }
     }
-
-    allStream.sort((a, b) => b.updatedAt - a.updatedAt)
-
-    const allDailyActivities = Array.from(dailyMap.values()).sort((a, b) =>
-      a.date.localeCompare(b.date)
-    )
-
-    const overallCacheHitRate =
-      totalInputTokens > 0
-        ? Number(((totalCachedTokens / totalInputTokens) * 100).toFixed(1))
-        : 0
+    const sum = (key: 'inputTokens' | 'cachedTokens' | 'cacheWriteTokens' | 'outputTokens' |
+      'reasoningTokens' | 'sessionCount' | 'totalCostUsd' | 'totalCacheSavingsUsd' | 'unpricedCount') =>
+      byTarget.reduce((total, target) => total + (target[key] ?? 0), 0)
+    const totalInputTokens = sum('inputTokens')
+    const totalCachedTokens = sum('cachedTokens')
 
     return {
       totalInputTokens,
       totalCachedTokens,
-      totalOutputTokens,
-      totalReasoningTokens,
-      overallCacheHitRate,
-      totalSessions,
-      totalCostUsd: Number(totalCostUsd.toFixed(2)),
-      totalSavingsUsd: Number(totalSavingsUsd.toFixed(2)),
-      allDailyActivities,
+      totalCacheWriteTokens: sum('cacheWriteTokens'),
+      totalOutputTokens: sum('outputTokens'),
+      totalReasoningTokens: sum('reasoningTokens'),
+      overallCacheHitRate: cacheHitRate(totalInputTokens, totalCachedTokens),
+      totalSessions: sum('sessionCount'),
+      totalCostUsd: sum('totalCostUsd'),
+      totalSavingsUsd: sum('totalCacheSavingsUsd'),
+      unpricedCount: sum('unpricedCount'),
+      allDailyActivities: Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
       proxyRunning: usageProxy.isRunning(),
       proxyPort: usageProxy.getPort(),
       byTarget,
-      recentStream: allStream.slice(0, 200)
+      recentStream: byTarget.flatMap((target) => target.recentSessions)
+        .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 200)
     }
   }
 

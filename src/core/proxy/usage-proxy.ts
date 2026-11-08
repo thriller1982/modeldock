@@ -1,4 +1,7 @@
 import http from 'node:http'
+import { randomUUID } from 'node:crypto'
+import { calculateCost } from '../pricing'
+import { cacheHitRate, tokenCount } from '../usage'
 import { loadStore, saveStore } from '../store/app-store'
 import { SessionUsageItem, TargetCategory, TargetId } from '../types'
 
@@ -70,29 +73,35 @@ export class LocalUsageProxy {
           for await (const chunk of req) {
             chunks.push(Buffer.from(chunk))
           }
-          const bodyBuf = Buffer.concat(chunks)
+          let bodyBuf = Buffer.concat(chunks)
 
           let reqModel = provider.defaultModel
           try {
             if (bodyBuf.length > 0) {
               const reqJson = JSON.parse(bodyBuf.toString('utf8'))
-              if (reqJson.model) reqModel = reqJson.model
-              // Inject stream_options.include_usage if streaming so SSE emits usage chunk
-              if (reqJson.stream && !reqJson.stream_options) {
-                reqJson.stream_options = { include_usage: true }
+              if (typeof reqJson.model === 'string') reqModel = reqJson.model
+              if (provider.protocol === 'openai' && /\/chat\/completions(?:\?|$)/.test(finalPath) &&
+                  reqJson.stream && reqJson.stream_options?.include_usage === undefined) {
+                reqJson.stream_options = { ...reqJson.stream_options, include_usage: true }
+                bodyBuf = Buffer.from(JSON.stringify(reqJson))
               }
             }
           } catch {
             // ignore
           }
 
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+          if (provider.protocol === 'anthropic') {
+            headers['x-api-key'] = provider.apiKey
+            headers['anthropic-version'] = String(req.headers['anthropic-version'] ?? '2023-06-01')
+            if (req.headers['anthropic-beta']) headers['anthropic-beta'] = String(req.headers['anthropic-beta'])
+          } else {
+            headers.Authorization = 'Bearer ' + provider.apiKey
+          }
           const reqStartMs = Date.now()
           const upstreamRes = await fetch(upstreamUrl, {
             method: req.method || 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${provider.apiKey}`
-            },
+            headers,
             body: req.method !== 'GET' && req.method !== 'HEAD' ? bodyBuf : undefined
           })
 
@@ -102,30 +111,51 @@ export class LocalUsageProxy {
             Connection: 'keep-alive'
           })
 
-          let fullResponseText = ''
+          const streaming = upstreamRes.headers.get('content-type')?.includes('text/event-stream')
+          let buffered = ''
+          let usage: Record<string, any> = {}
+          let responseModel = reqModel
+          const accept = (data: string) => {
+            try {
+              const event = JSON.parse(data)
+              const payload = event.response ?? event.message ?? event
+              if (typeof payload.model === 'string') responseModel = payload.model
+              if (payload.usage) {
+                // Anthropic streams put input usage in message_start and cumulative output in message_delta.
+                usage = { ...usage, ...payload.usage }
+              }
+            } catch {
+              // Ignore the SSE terminator and malformed events.
+            }
+          }
+
           if (upstreamRes.body) {
             const reader = upstreamRes.body.getReader()
             const decoder = new TextDecoder()
             while (true) {
               const { done, value } = await reader.read()
               if (done) break
-              if (value) {
-                res.write(value)
-                fullResponseText += decoder.decode(value, { stream: true })
+              res.write(value)
+              if (!upstreamRes.ok) continue
+              buffered += decoder.decode(value, { stream: true })
+              if (streaming) {
+                const lines = buffered.split('\n')
+                buffered = lines.pop() ?? ''
+                for (const line of lines) {
+                  if (line.startsWith('data:')) accept(line.slice(5))
+                }
               }
             }
+            buffered += decoder.decode()
           }
           res.end()
-          const durationMs = Math.max(1, Date.now() - reqStartMs)
-
-          this.extractAndRecordUsage(
-            fullResponseText,
-            targetMeta,
-            provider.name,
-            reqModel,
-            durationMs
-          )
+          if (!upstreamRes.ok) return
+          if (streaming && buffered.startsWith('data:')) accept(buffered.slice(5))
+          if (!streaming) accept(buffered)
+          this.recordUsage(usage, targetMeta, provider.name, provider.protocol, responseModel,
+            Math.max(1, Date.now() - reqStartMs))
         } catch (err: any) {
+          if (res.writableEnded) return
           if (!res.headersSent) {
             res.writeHead(500, { 'Content-Type': 'application/json' })
           }
@@ -153,98 +183,68 @@ export class LocalUsageProxy {
     this.running = false
   }
 
-  private extractAndRecordUsage(
-    rawText: string,
-    targetMeta: { id: TargetId; name: string; category: TargetCategory },
-    providerName: string,
+  private recordUsage(
+    usage: Record<string, any>,
+    target: (typeof ROUTE_TO_TARGET)[string],
+    provider: string,
+    protocol: 'openai' | 'anthropic',
     model: string,
-    durationMs?: number
+    durationMs: number
   ): void {
-    try {
-      let inputTokens = 0
-      let cachedTokens = 0
-      let cacheWriteTokens = 0
-      let outputTokens = 0
-      let reasoningTokens = 0
+    const rawInput = tokenCount(usage.prompt_tokens ?? usage.input_tokens)
+    const generated = tokenCount(usage.completion_tokens ?? usage.output_tokens)
+    const read = tokenCount(usage.prompt_tokens_details?.cached_tokens ??
+      usage.input_tokens_details?.cached_tokens ?? usage.input_token_details?.cached_tokens ??
+      usage.cache_read_input_tokens ?? usage.prompt_cache_hit_tokens ?? usage.cached_input_tokens)
+    const longWrite = tokenCount(usage.cache_creation?.ephemeral_1h_input_tokens ??
+      usage.input_tokens_details?.cache_write_tokens_details?.ttl_12h_tokens)
+    const shortWrite = tokenCount(usage.cache_creation?.ephemeral_5m_input_tokens ??
+      usage.input_tokens_details?.cache_write_tokens_details?.ttl_30m_tokens)
+    const write = tokenCount(usage.cache_creation_input_tokens ?? usage.cache_write_input_tokens ??
+      usage.input_tokens_details?.cache_write_tokens ?? usage.prompt_tokens_details?.cache_write_tokens ??
+      usage.prompt_tokens_details?.cache_creation_input_tokens ?? shortWrite + longWrite)
+    const inputTokens = protocol === 'anthropic' ? rawInput + read + write : rawInput
+    const cachedTokens = Math.min(inputTokens, read)
+    const cacheWriteTokens = Math.min(inputTokens - cachedTokens, write)
+    const reasoningTokens = Math.min(generated, tokenCount(usage.completion_tokens_details?.reasoning_tokens ??
+      usage.output_tokens_details?.reasoning_tokens ?? usage.output_token_details?.reasoning_tokens ??
+      usage.reasoning_output_tokens))
+    const outputTokens = generated - reasoningTokens
+    const totalTokens = inputTokens + generated
+    if (totalTokens <= 0) return
 
-      // Handle both SSE (`data: {...}`) and standard JSON response
-      const lines = rawText.split('\n')
-      for (const line of lines) {
-        const trimmed = line.trim()
-        const jsonStr = trimmed.startsWith('data:') ? trimmed.slice(5).trim() : trimmed
-        if (!jsonStr || jsonStr === '[DONE]' || !jsonStr.includes('usage')) continue
-        try {
-          const obj = JSON.parse(jsonStr)
-          const u = obj.usage || obj.response?.usage || obj.message?.usage
-          if (u) {
-            const pIn = Number(u.prompt_tokens || u.input_tokens || 0)
-            const cOut = Number(u.completion_tokens || u.output_tokens || 0)
-            const cRead = Number(
-              u.prompt_tokens_details?.cached_tokens ??
-                u.input_token_details?.cached_tokens ??
-                u.cache_read_input_tokens ??
-                u.cached_input_tokens ??
-                0
-            )
-            const cWrite = Number(u.cache_creation_input_tokens || u.cache_write_input_tokens || 0)
-            const rTok = Number(
-              u.completion_tokens_details?.reasoning_tokens ||
-                u.output_token_details?.reasoning_tokens ||
-                u.reasoning_output_tokens ||
-                0
-            )
-
-            // In Anthropic format, input_tokens is only fresh input; in OpenAI format, prompt_tokens includes cached_tokens
-            const isAnthropicStyle = u.cache_read_input_tokens !== undefined
-            inputTokens = isAnthropicStyle ? pIn + cRead + cWrite : Math.max(pIn, cRead)
-            cachedTokens = cRead
-            cacheWriteTokens = cWrite
-            outputTokens = cOut
-            reasoningTokens = rTok
-          }
-        } catch {
-          // continue
-        }
-      }
-
-      const totalTokens = inputTokens + outputTokens + reasoningTokens
-      if (totalTokens <= 0) return
-
-      const hitRate = inputTokens > 0 ? Number(((cachedTokens / inputTokens) * 100).toFixed(1)) : 0
-      const genTokens = outputTokens + reasoningTokens
-      const outputTokensPerSec =
-        durationMs && durationMs > 100 && genTokens > 0
-          ? Number(((genTokens / durationMs) * 1000).toFixed(1))
-          : undefined
-
-      const item: SessionUsageItem = {
-        id: `proxy_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        targetId: targetMeta.id,
-        targetName: targetMeta.name,
-        category: targetMeta.category,
-        title: `[网关实时拦截] ${model}`,
-        model,
-        provider: providerName,
-        inputTokens,
-        cachedTokens,
-        cacheWriteTokens,
-        outputTokens,
-        reasoningTokens,
-        totalTokens,
-        cacheHitRate: hitRate,
-        outputTokensPerSec,
-        durationMs,
-        updatedAt: Date.now(),
-        source: 'local-proxy'
-      }
-
-      const store = loadStore()
-      store.proxyUsageLogs = [item, ...(store.proxyUsageLogs || [])].slice(0, 200)
-      saveStore(store)
-    } catch {
-      // ignore
+    const price = calculateCost(model, inputTokens, cachedTokens, outputTokens, reasoningTokens, cacheWriteTokens, longWrite)
+    const item: SessionUsageItem = {
+      id: 'proxy_' + randomUUID(),
+      targetId: target.id,
+      targetName: target.name,
+      category: target.category,
+      title: '[网关] ' + model,
+      model,
+      provider,
+      inputTokens,
+      cachedTokens,
+      cacheWriteTokens,
+      outputTokens,
+      reasoningTokens,
+      totalTokens,
+      cacheHitRate: cacheHitRate(inputTokens, cachedTokens),
+      outputTokensPerSec: durationMs > 100 && outputTokens > 0
+        ? Number(((outputTokens / durationMs) * 1000).toFixed(1))
+        : undefined,
+      durationMs,
+      costUsd: price.costUsd,
+      cacheSavingsUsd: price.savingsUsd,
+      updatedAt: Date.now(),
+      source: 'local-proxy',
+      usageVersion: 2
     }
+
+    const store = loadStore()
+    store.proxyUsageLogs = [item, ...store.proxyUsageLogs].slice(0, 200)
+    saveStore(store)
   }
+
 }
 
 export const usageProxy = new LocalUsageProxy()
