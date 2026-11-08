@@ -1,6 +1,7 @@
 {
-  "name": "cc-switch-lite",
-  "version": "1.0.1",
+  "name": "modeldock",
+  "productName": "ModelDock",
+  "version": "1.0.2",
   "description": "Clean AI Coding Assistant Switcher & Token/Cache Monitor (Desktop vs CLI)",
   "main": "dist-electron/main/index.js",
   "scripts": {

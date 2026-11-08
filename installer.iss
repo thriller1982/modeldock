@@ -1,4 +1,4 @@
-#define AppName "CC-Switch Lite"
+#define AppName "ModelDock"
 #define AppExe "CC-Switch-Lite.exe"
 
 [Setup]
@@ -12,7 +12,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=release
-OutputBaseFilename=CC-Switch-Lite-Setup-{#AppVersion}-x64
+OutputBaseFilename=ModelDock-Setup-{#AppVersion}-x64
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -32,6 +32,9 @@ Source: "node_modules\smol-toml\LICENSE"; DestDir: "{app}\resources\app\node_mod
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
+
+[InstallDelete]
+Type: files; Name: "{autoprograms}\CC-Switch Lite.lnk"
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent

@@ -825,7 +825,7 @@ export default function App() {
                 <Sparkles className="h-3.5 w-3.5" />
               </div>
               <span className="text-[14px] font-semibold tracking-tight text-fg-1">
-                CC Switch
+                ModelDock
               </span>
             </div>
           )}
@@ -2203,7 +2203,7 @@ export default function App() {
                       </span>
                     </div>
                     <p className="mt-1 text-xs text-fg-3">
-                      Windows 登录后自动在后台启动 CC Switch，保持通用 Skill 实时同步、配置快速切换与本地用量网关就绪。
+                      Windows 登录后自动在后台启动 ModelDock，保持通用 Skill 实时同步、配置快速切换与本地用量网关就绪。
                     </p>
                   </div>
 

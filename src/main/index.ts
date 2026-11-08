@@ -10,7 +10,7 @@ function createWindow(): void {
     minHeight: 700,
     show: false,
     autoHideMenuBar: true,
-    title: 'CC-Switch Lite · AI 研发工具配置与缓存率监控中心',
+    title: 'ModelDock · AI 研发工具配置与缓存率监控中心',
     backgroundColor: '#090d16',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
