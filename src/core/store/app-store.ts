@@ -13,6 +13,7 @@ export interface AppDatabase {
   modeByTarget: Partial<Record<TargetId, SwitchMode>>
   theme: ThemeSetting
   autoLaunch?: boolean
+  minimizeToTray?: boolean
   /** Strictly isolated per-target provider lists */
   providersByTarget: Record<TargetId, ProviderProfile[]>
   mcps: UnifiedMcpServer[]
@@ -227,6 +228,7 @@ function getInitialStore(): AppDatabase {
     modeByTarget: {},
     theme: 'system',
     autoLaunch: false,
+    minimizeToTray: true,
     providersByTarget,
     mcps,
     skillsHubPath: DEFAULT_SKILLS_HUB,
@@ -244,6 +246,7 @@ function migrate(raw: any): AppDatabase {
       proxyPort: raw?.proxyPort || 15721,
       theme: raw?.theme || 'system',
       autoLaunch: raw?.autoLaunch ?? false,
+      minimizeToTray: raw?.minimizeToTray ?? true,
       mcps: Array.isArray(raw?.mcps) && raw.mcps.length > 0 ? raw.mcps : fresh.mcps,
       skillsHubPath: raw?.skillsHubPath || DEFAULT_SKILLS_HUB,
       skills: Array.isArray(raw?.skills) ? raw.skills : [],
@@ -258,6 +261,7 @@ function migrate(raw: any): AppDatabase {
     modeByTarget: raw.modeByTarget || {},
     theme: raw.theme || 'system',
     autoLaunch: raw.autoLaunch ?? false,
+    minimizeToTray: raw.minimizeToTray ?? true,
     providersByTarget: {
       'codex-desktop': raw.providersByTarget['codex-desktop'] || [],
       workbuddy: raw.providersByTarget.workbuddy || [],

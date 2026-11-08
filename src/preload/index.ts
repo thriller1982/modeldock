@@ -24,6 +24,8 @@ const api = {
   openSkillsFolder: () => ipcRenderer.invoke('ccswitch:openSkillsFolder'),
   getAutoLaunch: () => ipcRenderer.invoke('ccswitch:getAutoLaunch'),
   setAutoLaunch: (enabled: boolean) => ipcRenderer.invoke('ccswitch:setAutoLaunch', { enabled }),
+  getMinimizeToTray: () => ipcRenderer.invoke('ccswitch:getMinimizeToTray'),
+  setMinimizeToTray: (enabled: boolean) => ipcRenderer.invoke('ccswitch:setMinimizeToTray', { enabled }),
   openBackupsFolder: () => ipcRenderer.invoke('ccswitch:openBackupsFolder')
 }
 

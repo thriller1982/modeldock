@@ -568,6 +568,7 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null)
   const [usageFilter, setUsageFilter] = useState<string>('all')
   const [autoLaunch, setAutoLaunch] = useState<boolean>(false)
+  const [minimizeToTray, setMinimizeToTray] = useState<boolean>(true)
 
   // Skill states
   const [skills, setSkills] = useState<UnifiedSkill[]>([])
@@ -624,11 +625,12 @@ export default function App() {
         }
         return data
       })
-      const [dashData, targetsData, skillsData, autoLaunchData] = await Promise.all([
+      const [dashData, targetsData, skillsData, autoLaunchData, trayData] = await Promise.all([
         clientApi.getDashboard(),
         targets,
         clientApi.getSkills(),
-        clientApi.getAutoLaunch().catch(() => ({ enabled: false, isPackaged: false }))
+        clientApi.getAutoLaunch().catch(() => ({ enabled: false, isPackaged: false })),
+        clientApi.getMinimizeToTray().catch(() => ({ enabled: true }))
       ])
       setDashboard(dashData)
       setDesktopTargets(targetsData.desktop)
@@ -638,6 +640,9 @@ export default function App() {
       setSkillsHubPath(skillsData.hubPath || '')
       if (autoLaunchData) {
         setAutoLaunch(!!autoLaunchData.enabled)
+      }
+      if (trayData) {
+        setMinimizeToTray(trayData.enabled !== false)
       }
     } catch (e: any) {
       notify(`加载数据失败: ${e.message}`)
@@ -837,6 +842,18 @@ export default function App() {
     } catch (e: any) {
       setAutoLaunch(!next)
       notify(`设置开机自启失败: ${e.message}`)
+    }
+  }
+
+  const handleToggleMinimizeToTray = async () => {
+    const next = !minimizeToTray
+    setMinimizeToTray(next)
+    try {
+      await clientApi.setMinimizeToTray(next)
+      notify(next ? '已开启关闭时最小化到系统托盘' : '已关闭托盘常驻（点击关闭将退出程序）')
+    } catch (e: any) {
+      setMinimizeToTray(!next)
+      notify(`设置托盘行为失败: ${e.message}`)
     }
   }
 
@@ -2316,6 +2333,65 @@ export default function App() {
                       <span
                         className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-1 ring-black/10 transition duration-200 ease-in-out ${
                           autoLaunch ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* 关闭窗口时最小化到系统托盘开关 */}
+                <div
+                  onClick={handleToggleMinimizeToTray}
+                  className="flex items-center justify-between gap-4 py-2 border-t border-border pt-4 cursor-pointer group"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-medium text-fg-1 group-hover:text-action transition-colors">
+                        关闭时最小化到系统托盘 (Minimize to Tray on Close)
+                      </span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                          minimizeToTray
+                            ? 'bg-success-soft text-success-text'
+                            : 'bg-zinc-100 dark:bg-zinc-800 text-fg-3 border border-border'
+                        }`}
+                      >
+                        {minimizeToTray ? '● 已开启常驻' : '○ 直接退出'}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-fg-3">
+                      点击右上角关闭按钮 (✕) 时，保持 ModelDock 在系统托盘后台运行，保障通用 Skill 实时同步与模型随时切换。
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    <span
+                      className={`text-xs transition-colors ${
+                        minimizeToTray
+                          ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                          : 'text-fg-3 group-hover:text-action font-medium'
+                      }`}
+                    >
+                      {minimizeToTray ? '已启用' : '点击开启'}
+                    </span>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={minimizeToTray}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleToggleMinimizeToTray()
+                      }}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full p-0.5 transition-colors duration-200 ease-in-out focus:outline-none shadow-inner ${
+                        minimizeToTray
+                          ? 'bg-emerald-600 dark:bg-emerald-500'
+                          : 'bg-slate-300 dark:bg-zinc-700 hover:bg-slate-400 dark:hover:bg-zinc-600'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-1 ring-black/10 transition duration-200 ease-in-out ${
+                          minimizeToTray ? 'translate-x-5' : 'translate-x-0'
                         }`}
                       />
                     </button>

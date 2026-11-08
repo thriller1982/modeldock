@@ -48,6 +48,8 @@ declare global {
       openSkillsFolder: () => Promise<string>
       getAutoLaunch: () => Promise<{ enabled: boolean; isPackaged: boolean }>
       setAutoLaunch: (payload: { enabled: boolean }) => Promise<AppDatabase>
+      getMinimizeToTray: () => Promise<{ enabled: boolean }>
+      setMinimizeToTray: (payload: { enabled: boolean }) => Promise<AppDatabase>
       openBackupsFolder: () => Promise<void>
     }
   }
@@ -107,5 +109,7 @@ export const clientApi = {
   openSkillsFolder: () => callApi<string>('openSkillsFolder'),
   getAutoLaunch: () => callApi<{ enabled: boolean; isPackaged: boolean }>('getAutoLaunch'),
   setAutoLaunch: (enabled: boolean) => callApi<AppDatabase>('setAutoLaunch', { enabled }),
+  getMinimizeToTray: () => callApi<{ enabled: boolean }>('getMinimizeToTray'),
+  setMinimizeToTray: (enabled: boolean) => callApi<AppDatabase>('setMinimizeToTray', { enabled }),
   openBackupsFolder: () => callApi<void>('openBackupsFolder')
 }

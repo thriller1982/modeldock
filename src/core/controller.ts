@@ -535,6 +535,13 @@ ${fullContent}
     saveStore(store)
     return store
   }
+
+  setMinimizeToTray(enabled: boolean): AppDatabase {
+    const store = loadStore()
+    store.minimizeToTray = enabled
+    saveStore(store)
+    return store
+  }
 }
 
 export const coreController = new CoreController()

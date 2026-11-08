@@ -1,17 +1,31 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, nativeImage } from 'electron'
 import { join } from 'path'
 import { coreController } from '../core/controller'
+import { APP_ICON_DATA_URL } from './icons-data'
+import { initTray, notifyMinimizedToTray, updateTrayMenu } from './tray'
 
-function createWindow(): void {
+// Enforce single instance lock
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  app.quit()
+}
+
+let mainWindow: BrowserWindow | null = null
+let isQuitting = false
+
+function createWindow(): BrowserWindow {
   const store = coreController.getStore()
   const isLight = store.theme === 'light'
-  const mainWindow = new BrowserWindow({
+  const appIcon = nativeImage.createFromDataURL(APP_ICON_DATA_URL)
+
+  mainWindow = new BrowserWindow({
     width: 1280,
     height: 840,
     minWidth: 1024,
     minHeight: 700,
     show: false,
     autoHideMenuBar: true,
+    icon: appIcon,
     title: 'ModelDock · AI 研发工具配置与缓存率监控中心',
     backgroundColor: isLight ? '#f8fafc' : '#090d16',
     webPreferences: {
@@ -21,7 +35,22 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+    const isHidden = process.argv.includes('--hidden') || process.argv.includes('--minimized')
+    if (!isHidden && mainWindow) {
+      mainWindow.show()
+    }
+  })
+
+  // Intercept window close (X button): minimize to tray if enabled
+  mainWindow.on('close', (event) => {
+    const currentStore = coreController.getStore()
+    const minimizeToTray = currentStore.minimizeToTray !== false
+
+    if (!isQuitting && minimizeToTray) {
+      event.preventDefault()
+      mainWindow?.hide()
+      notifyMinimizedToTray()
+    }
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -35,6 +64,8 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  return mainWindow
 }
 
 function registerIpcHandlers(): void {
@@ -89,30 +120,77 @@ function registerIpcHandlers(): void {
       app.setLoginItemSettings({
         openAtLogin: !!enabled,
         path: process.execPath,
-        args: app.isPackaged ? [] : [app.getAppPath()]
+        args: app.isPackaged ? ['--hidden'] : [app.getAppPath(), '--hidden']
       })
     } catch (err) {
       console.error('Failed to setLoginItemSettings:', err)
     }
-    return coreController.setAutoLaunch(!!enabled)
+    const updated = coreController.setAutoLaunch(!!enabled)
+    if (mainWindow) {
+      updateTrayMenu(mainWindow, () => {
+        isQuitting = true
+        app.quit()
+      })
+    }
+    return updated
+  })
+  ipcMain.handle('ccswitch:getMinimizeToTray', () => {
+    const store = coreController.getStore()
+    return { enabled: store.minimizeToTray !== false }
+  })
+  ipcMain.handle('ccswitch:setMinimizeToTray', (_e, { enabled }) => {
+    const updated = coreController.setMinimizeToTray(!!enabled)
+    if (mainWindow) {
+      updateTrayMenu(mainWindow, () => {
+        isQuitting = true
+        app.quit()
+      })
+    }
+    return updated
   })
   ipcMain.handle('ccswitch:openBackupsFolder', () =>
     shell.openPath(coreController.getBackupsPath())
   )
 }
 
+app.on('before-quit', () => {
+  isQuitting = true
+})
+
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    if (!mainWindow.isVisible()) mainWindow.show()
+    mainWindow.focus()
+  }
+})
+
 app.whenReady().then(async () => {
   await coreController.init()
   registerIpcHandlers()
-  createWindow()
+  const win = createWindow()
+
+  initTray(win, () => {
+    isQuitting = true
+    app.quit()
+  })
 
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) {
+      const newWin = createWindow()
+      initTray(newWin, () => {
+        isQuitting = true
+        app.quit()
+      })
+    } else if (mainWindow) {
+      mainWindow.show()
+      mainWindow.focus()
+    }
   })
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  if (isQuitting || process.platform === 'darwin') {
     app.quit()
   }
 })

@@ -1,7 +1,7 @@
 {
   "name": "modeldock",
   "productName": "ModelDock",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Clean AI Coding Assistant Switcher & Token/Cache Monitor (Desktop vs CLI)",
   "main": "dist-electron/main/index.js",
   "scripts": {
@@ -19,10 +19,12 @@
     },
     "files": [
       "dist-electron/**/*",
+      "resources/**/*",
       "package.json"
     ],
     "win": {
       "target": "portable",
+      "icon": "resources/icon.ico",
       "artifactName": "${productName}-v${version}-win-x64.${ext}"
     }
   },
