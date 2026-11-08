@@ -10,18 +10,23 @@ export interface ModelPricing {
  */
 const PRICING_CATALOG: Record<string, ModelPricing> = {
   // --- OpenAI / Codex ---
-  'gpt-6.1-sol': { inputPerM: 15.0, cachePerM: 7.5, outputPerM: 60.0 },
-  'gpt-6-sol': { inputPerM: 15.0, cachePerM: 7.5, outputPerM: 60.0 },
-  'gpt-5.3-codex': { inputPerM: 10.0, cachePerM: 5.0, outputPerM: 40.0 },
-  'gpt-5-codex': { inputPerM: 10.0, cachePerM: 5.0, outputPerM: 40.0 },
-  'gpt-5': { inputPerM: 10.0, cachePerM: 5.0, outputPerM: 40.0 },
-  'gpt-6.1-terra': { inputPerM: 1.1, cachePerM: 0.55, outputPerM: 4.4 },
-  'gpt-6-terra': { inputPerM: 1.1, cachePerM: 0.55, outputPerM: 4.4 },
+  'gpt-6.1-sol': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
+  'gpt-6-sol': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
+  'gpt-5.6-sol': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
+  'gpt-5.3-codex': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
+  'gpt-5-codex': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
+  'gpt-5': { inputPerM: 2.0, cachePerM: 0.1, outputPerM: 10.0 },
+  'gpt-6.1-terra': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
+  'gpt-6-terra': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
+  'gpt-5.6-terra': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
+  'gpt-6-luna': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
+  'gpt-5.6-luna': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
+  'gpt-6-astra': { inputPerM: 1.0, cachePerM: 0.05, outputPerM: 5.0 },
   'gpt-4o': { inputPerM: 2.5, cachePerM: 1.25, outputPerM: 10.0 },
   'gpt-4o-mini': { inputPerM: 0.15, cachePerM: 0.075, outputPerM: 0.6 },
   'o1': { inputPerM: 15.0, cachePerM: 7.5, outputPerM: 60.0 },
   'o3-mini': { inputPerM: 1.1, cachePerM: 0.55, outputPerM: 4.4 },
-  'codex-auto-review': { inputPerM: 0.5, cachePerM: 0.25, outputPerM: 2.0 },
+  'codex-auto-review': { inputPerM: 0.0, cachePerM: 0.0, outputPerM: 0.0 }, // Free system review model
 
   // --- DeepSeek ---
   'deepseek-chat': { inputPerM: 0.14, cachePerM: 0.014, outputPerM: 0.28 },
@@ -83,9 +88,11 @@ export function getModelPricing(modelName: string): ModelPricing {
   if (PRICING_CATALOG[norm]) return PRICING_CATALOG[norm]
 
   // Fuzzy prefix/token matching
+  if (norm.includes('auto-review') || norm.includes('review') || norm.includes('guardian')) {
+    return PRICING_CATALOG['codex-auto-review']
+  }
   if (norm.includes('sol')) return PRICING_CATALOG['gpt-6.1-sol']
-  if (norm.includes('terra')) return PRICING_CATALOG['gpt-6.1-terra']
-  if (norm.includes('auto-review') || norm.includes('review')) return PRICING_CATALOG['codex-auto-review']
+  if (norm.includes('terra') || norm.includes('luna') || norm.includes('astra')) return PRICING_CATALOG['gpt-6.1-terra']
   if (norm.includes('o1')) return PRICING_CATALOG['o1']
   if (norm.includes('o3')) return PRICING_CATALOG['o3-mini']
   if (norm.includes('gpt-5') || norm.includes('gpt-codex')) return PRICING_CATALOG['gpt-5-codex']
@@ -110,7 +117,6 @@ export function getModelPricing(modelName: string): ModelPricing {
   if (norm.includes('free') || norm.includes('hy4')) return PRICING_CATALOG['hy4-free']
   if (norm.includes('hunyuan')) return PRICING_CATALOG['hunyuan-pro']
 
-  if (norm.includes('luna')) return PRICING_CATALOG['gpt-5-codex']
   if (norm.includes('qwen') || norm.includes('tongyi')) return PRICING_CATALOG['qwen-flash']
   if (norm.includes('glm')) return PRICING_CATALOG['glm-5']
   if (norm.includes('mimo')) return PRICING_CATALOG['mimo-v2.5-pro']

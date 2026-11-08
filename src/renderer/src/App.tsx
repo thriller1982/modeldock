@@ -467,8 +467,8 @@ function TokenActivityHeatmap({
                 {formatTokens(tooltip.outTok)}
               </div>
               <div className="text-emerald-300 font-medium">
-                等值额度: ${tooltip.costUsd.toFixed(3)}
-                {tooltip.savingsUsd > 0
+                等值额度: {tooltip.costUsd > 0 ? `$${tooltip.costUsd.toFixed(3)}` : '免费 / $0.000'}
+                {tooltip.costUsd > 0 && tooltip.savingsUsd > 0
                   ? ` (缓存为您节省 $${tooltip.savingsUsd.toFixed(3)})`
                   : ''}
               </div>
@@ -1667,9 +1667,15 @@ export default function App() {
                             {item.costUsd !== undefined ? (
                               <div>
                                 <span className="font-semibold text-fg-1">
-                                  ${item.costUsd.toFixed(3)}
+                                  {item.costUsd === 0 ? (
+                                    <span className="inline-block rounded px-1.5 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-500/10">
+                                      免费
+                                    </span>
+                                  ) : (
+                                    `$${item.costUsd.toFixed(3)}`
+                                  )}
                                 </span>
-                                {item.cacheSavingsUsd && item.cacheSavingsUsd > 0 ? (
+                                {item.costUsd > 0 && item.cacheSavingsUsd && item.cacheSavingsUsd > 0 ? (
                                   <span
                                     className="block text-[10px] text-route-text font-normal"
                                     title={`Prompt 缓存为您节省 $${item.cacheSavingsUsd.toFixed(3)}`}
