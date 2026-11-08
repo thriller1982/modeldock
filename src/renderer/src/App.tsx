@@ -130,6 +130,110 @@ function ProviderBadge({ name }: { name: string }) {
   )
 }
 
+interface TokenWeek {
+  startDay: string
+  endDay: string
+  tokens: number
+  cost: number
+  unpriced: number
+  cumulativeTokens: number
+  cumulativeCost: number
+  cumulativeUnpriced: number
+}
+
+function TokenWeekChart({ weeks, cumulative }: { weeks: TokenWeek[]; cumulative: boolean }) {
+  const lastIndex = weeks.length - 1
+  const [hovered, setHovered] = useState<number | null>(null)
+  const [focused, setFocused] = useState<number | null>(null)
+  const index = hovered ?? focused ?? lastIndex
+  const selected = weeks[index]
+  const values = weeks.map((week) => cumulative ? week.cumulativeTokens : week.tokens)
+  const maximum = Math.max(...values)
+  const ticks = maximum > 1 ? [maximum, Math.round(maximum / 2), 0] : [maximum, 0]
+  const label = cumulative ? '累计用量' : '每周用量'
+  const width = weeks.length * 10
+  const y = (tokens: number) => maximum > 0 ? 96 - (tokens / maximum) * 92 : 96
+  const curve = values.reduce((path, tokens, i) => `${path} H${i * 10 + 5} V${y(tokens)}`, 'M0 96') + ` H${width}`
+
+  if (maximum === 0) {
+    return <div className="flex h-[172px] items-center justify-center text-xs text-fg-3">近 52 周暂无 Token 活动</div>
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)_minmax(0,1fr)] gap-3 text-xs" aria-live="polite">
+        <div>
+          <div className="text-fg-3">{cumulative ? '从图表起点累计至' : '统计区间 · 每柱 7 天'}</div>
+          <div className="mt-1 font-medium tabular-nums text-fg-1">
+            {cumulative ? selected.endDay : `${selected.startDay} 至 ${selected.endDay}`}
+          </div>
+        </div>
+        <div>
+          <div className="text-fg-3">{label}（Tokens）</div>
+          <div className="mt-1 font-semibold tabular-nums text-fg-1">{values[index].toLocaleString('zh-CN')}</div>
+        </div>
+        <div>
+          <div className="text-fg-3">{cumulative ? '累计等值' : '该周等值'}</div>
+          <div className="mt-1 font-medium tabular-nums text-fg-1">
+            {formatUsageCost(cumulative ? selected.cumulativeCost : selected.cost,
+              cumulative ? selected.cumulativeUnpriced : selected.unpriced)}
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-2">
+        <div className="relative text-right text-[10px] tabular-nums text-fg-3" aria-hidden="true">
+          {ticks.map((value) => (
+            <span key={value} className="absolute right-0 -translate-y-1/2" style={{ top: `${y(value)}%` }}>
+              {formatTokens(value)}
+            </span>
+          ))}
+        </div>
+        <div
+          className="h-28 cursor-crosshair rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-action"
+          role="group"
+          aria-label={`${label}图，使用左右方向键查看每周数值`}
+          tabIndex={0}
+          onPointerMove={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect()
+            const i = Math.floor((event.clientX - rect.left) * weeks.length / rect.width)
+            setHovered(Math.max(0, Math.min(lastIndex, i)))
+          }}
+          onPointerLeave={() => setHovered(null)}
+          onKeyDown={(event) => {
+            const current = focused ?? index
+            const next = { ArrowLeft: current - 1, ArrowRight: current + 1, Home: 0, End: lastIndex }[event.key]
+            if (next === undefined) return
+            event.preventDefault()
+            setHovered(null)
+            setFocused(Math.max(0, Math.min(lastIndex, next)))
+          }}
+          onBlur={() => setFocused(null)}
+        >
+          <svg className="pointer-events-none block h-full w-full" viewBox={`0 0 ${width} 100`} preserveAspectRatio="none" aria-hidden="true">
+            {ticks.map((value) => (
+              <line key={value} x1={0} x2={width} y1={y(value)} y2={y(value)} className="stroke-border" vectorEffect="non-scaling-stroke" />
+            ))}
+            {cumulative ? (
+              <>
+                <path d={`${curve} V96 H0 Z`} className="fill-route-soft" />
+                <path d={curve} fill="none" className="stroke-route-text" strokeWidth={2} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+              </>
+            ) : values.map((tokens, i) => tokens > 0 && (
+              <rect key={weeks[i].endDay} x={i * 10 + 1} y={Math.min(95, y(tokens))} width={8} height={Math.max(1, 96 - y(tokens))}
+                rx={1} className={i === index ? 'fill-action-hover' : 'fill-action'} />
+            ))}
+            <line x1={index * 10 + 5} x2={index * 10 + 5} y1={4} y2={96} className="stroke-fg-3" strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
+          </svg>
+        </div>
+        <div className="col-start-2 mt-1 flex justify-between text-[10px] tabular-nums text-fg-3">
+          <span>{weeks[0].startDay}</span>
+          <span>{weeks[lastIndex].endDay}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 interface TokenActivityHeatmapProps {
   activities?: DailyActivityItem[]
   title?: string
@@ -247,7 +351,6 @@ function TokenActivityHeatmap({
       monthLabels: monthCols,
       stats: {
         maxTokens,
-        totalTok,
         totalCost,
         totalSav,
         unpricedCount,
@@ -273,34 +376,22 @@ function TokenActivityHeatmap({
   }
 
   const weeklyData = React.useMemo(() => {
-    return weeks.map((w, idx) => {
-      const weekTok = w.days.reduce((sum, d) => sum + d.tokens, 0)
-      const weekCost = w.days.reduce((sum, d) => sum + (d.data?.costUsd || 0), 0)
-      const startDay = w.days[0].dateStr
-      const endDay = w.days[6].dateStr
-      return { weekIdx: idx, weekTok, weekCost, startDay, endDay }
-    })
-  }, [weeks])
-
-  const cumulativeData = React.useMemo(() => {
-    let runningTokens = 0
-    let runningCost = 0
-    return weeks.map((w, idx) => {
-      const weekTok = w.days.reduce((sum, d) => sum + d.tokens, 0)
-      const weekCost = w.days.reduce((sum, d) => sum + (d.data?.costUsd || 0), 0)
-      runningTokens += weekTok
-      runningCost += weekCost
+    let cumulativeTokens = 0
+    let cumulativeCost = 0
+    let cumulativeUnpriced = 0
+    return weeks.map(({ days }): TokenWeek => {
+      const tokens = days.reduce((sum, day) => sum + day.tokens, 0)
+      const cost = days.reduce((sum, day) => sum + (day.data?.costUsd ?? 0), 0)
+      const unpriced = days.reduce((sum, day) => sum + (day.data?.unpricedCount ?? 0), 0)
+      cumulativeTokens += tokens
+      cumulativeCost += cost
+      cumulativeUnpriced += unpriced
       return {
-        weekIdx: idx,
-        runningTokens,
-        runningCost,
-        date: w.days[6].dateStr
+        startDay: days[0].dateStr, endDay: days[6].dateStr, tokens, cost, unpriced,
+        cumulativeTokens, cumulativeCost, cumulativeUnpriced
       }
     })
   }, [weeks])
-
-  const maxWeeklyTok = Math.max(1, ...weeklyData.map((w) => w.weekTok))
-  const maxCumulativeTok = Math.max(1, ...cumulativeData.map((c) => c.runningTokens))
 
   return (
     <div className="rounded-panel border border-border bg-surface p-4 shadow-v7-sm space-y-3 relative">
@@ -319,6 +410,7 @@ function TokenActivityHeatmap({
               <button
                 key={m}
                 onClick={() => setMode(m)}
+                aria-pressed={mode === m}
                 className={`rounded-[4px] px-2.5 py-0.5 text-xs transition ${
                   mode === m
                     ? 'bg-surface font-medium text-fg-1 shadow-sm'
@@ -382,82 +474,8 @@ function TokenActivityHeatmap({
         </div>
       )}
 
-      {mode === 'weekly' && (
-        <div className="overflow-x-auto py-2">
-          <div className="min-w-[720px] h-[100px] flex items-end gap-[3.5px]">
-            {weeklyData.map((w) => {
-              const hPct = Math.max(4, Math.round((w.weekTok / maxWeeklyTok) * 100))
-              return (
-                <div
-                  key={w.weekIdx}
-                  className="group relative flex-1 flex flex-col items-center justify-end h-full"
-                >
-                  <div
-                    style={{ height: `${hPct}%` }}
-                    className={`w-full rounded-t-[2.5px] transition-all ${
-                      w.weekTok > 0 ? 'bg-action hover:bg-action-hover' : 'bg-subtle/50'
-                    }`}
-                  />
-                  {w.weekTok > 0 && (
-                    <div className="pointer-events-none absolute bottom-full mb-1.5 hidden group-hover:flex flex-col items-center z-30">
-                      <div className="rounded bg-fg-1 text-app px-2 py-1 text-[10px] whitespace-nowrap shadow-lg">
-                        <div>
-                          {w.startDay} ~ {w.endDay}
-                        </div>
-                        <div className="font-mono font-semibold">
-                          {formatTokens(w.weekTok)} Tokens
-                        </div>
-                        {w.weekCost > 0 && <div>等值额度: ${w.weekCost.toFixed(2)}</div>}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-          <div className="flex justify-between text-[10px] text-fg-3 mt-1.5">
-            <span>52 周前</span>
-            <span>近期活跃周</span>
-            <span>本周</span>
-          </div>
-        </div>
-      )}
-
-      {mode === 'cumulative' && (
-        <div className="overflow-x-auto py-2">
-          <div className="min-w-[720px] h-[100px] flex items-end gap-[3.5px]">
-            {cumulativeData.map((c) => {
-              const hPct = Math.max(4, Math.round((c.runningTokens / maxCumulativeTok) * 100))
-              return (
-                <div
-                  key={c.weekIdx}
-                  className="group relative flex-1 flex flex-col items-center justify-end h-full"
-                >
-                  <div
-                    style={{ height: `${hPct}%` }}
-                    className="w-full rounded-t-[2px] bg-route-text/80 hover:bg-route-text transition-all"
-                  />
-                  <div className="pointer-events-none absolute bottom-full mb-1.5 hidden group-hover:flex flex-col items-center z-30">
-                    <div className="rounded bg-fg-1 text-app px-2 py-1 text-[10px] whitespace-nowrap shadow-lg">
-                      <div>截止 {c.date}</div>
-                      <div className="font-mono font-semibold">
-                        累计 {formatTokens(c.runningTokens)} Tokens
-                      </div>
-                      <div>累计等值: ${c.runningCost.toFixed(2)}</div>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-          <div className="flex justify-between text-[10px] text-fg-3 mt-1.5">
-            <span>初始</span>
-            <span>累计增长趋势</span>
-            <span className="font-mono font-semibold text-fg-1">
-              总计 {formatTokens(stats.totalTok)}
-            </span>
-          </div>
-        </div>
+      {mode !== 'daily' && (
+        <TokenWeekChart key={mode} weeks={weeklyData} cumulative={mode === 'cumulative'} />
       )}
 
       {tooltip && (
