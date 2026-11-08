@@ -547,9 +547,18 @@ export default function App() {
   const [view, setView] = useState<MainView>('app')
   const [activeAppId, setActiveAppId] = useState<TargetId>('codex-desktop')
   const [collapsed, setCollapsed] = useState(false)
-  const [darkPreference, setDarkPreference] = useState<boolean | null>(null)
+  const [darkPreference, setDarkPreference] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('modeldock_theme')
+      if (saved === 'light') return false
+      if (saved === 'dark') return true
+      return window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)').matches : true
+    } catch {
+      return true
+    }
+  })
   const [savingTheme, setSavingTheme] = useState(false)
-  const isDark = darkPreference ?? true
+  const isDark = darkPreference
 
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null)
   const [desktopTargets, setDesktopTargets] = useState<TargetStatus[]>([])
@@ -602,7 +611,17 @@ export default function App() {
     setLoading(true)
     try {
       const targets = clientApi.getTargets().then((data) => {
-        setDarkPreference((current) => current ?? (data.store.theme !== 'light'))
+        if (data.store?.theme) {
+          const t = data.store.theme
+          let effectiveDark = true
+          if (t === 'light') effectiveDark = false
+          else if (t === 'dark') effectiveDark = true
+          else if (window.matchMedia) effectiveDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+          setDarkPreference(effectiveDark)
+          try {
+            localStorage.setItem('modeldock_theme', t)
+          } catch {}
+        }
         return data
       })
       const [dashData, targetsData, skillsData, autoLaunchData] = await Promise.all([
@@ -631,17 +650,36 @@ export default function App() {
     refreshAll()
   }, [])
 
-  const toggleTheme = async () => {
-    const next = isDark ? 'light' : 'dark'
+  const handleSetTheme = async (themeMode: 'system' | 'light' | 'dark') => {
     setSavingTheme(true)
+    let effectiveDark = true
+    if (themeMode === 'light') effectiveDark = false
+    else if (themeMode === 'dark') effectiveDark = true
+    else if (window.matchMedia) effectiveDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+
+    setDarkPreference(effectiveDark)
     try {
-      await clientApi.updateTheme(next)
-      setDarkPreference(next === 'dark')
+      localStorage.setItem('modeldock_theme', themeMode)
+    } catch {}
+
+    const root = document.documentElement
+    if (effectiveDark) root.classList.add('dark')
+    else root.classList.remove('dark')
+
+    try {
+      const nextStore = await clientApi.updateTheme(themeMode)
+      setStore(nextStore)
+      notify(`已永久保存外观设置：${themeMode === 'light' ? '浅色模式' : themeMode === 'dark' ? '深色模式' : '跟随系统'}`)
     } catch {
       notify('保存外观设置失败')
     } finally {
       setSavingTheme(false)
     }
+  }
+
+  const toggleTheme = async () => {
+    const next = isDark ? 'light' : 'dark'
+    await handleSetTheme(next)
   }
 
   useEffect(() => {
@@ -2181,13 +2219,51 @@ export default function App() {
               </button>
             </header>
             <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-              {/* Card 1: 基础系统设置 (开机自启开关) */}
+              {/* Card 1: 基础系统设置 (外观色彩与开机自启) */}
               <div className="rounded-panel border border-border bg-surface p-5 shadow-v7-sm space-y-4">
                 <h3 className="text-[14px] font-semibold text-fg-1 flex items-center gap-2">
                   <Power className="h-4 w-4 text-action" />
-                  系统启动设置
+                  系统与外观设置
                 </h3>
 
+                {/* 外观颜色与主题设置 */}
+                <div className="flex items-center justify-between gap-4 py-2 border-t border-border pt-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-medium text-fg-1">外观色彩主题 (Theme)</span>
+                      <span className="rounded-full px-2 py-0.5 text-[11px] font-medium bg-direct-soft text-direct-text">
+                        永久写入系统 ~/.modeldock
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-fg-3">
+                      选择应用外观色彩，配置将永久写入当前系统用户目录，随绿色免安装版任意移动均持久生效，打开无需重新切换。
+                    </p>
+                  </div>
+
+                  <div className="flex items-center rounded-control border border-border bg-subtle p-0.5 text-xs">
+                    {(['system', 'light', 'dark'] as const).map((mode) => {
+                      const currentTheme = store?.theme || (localStorage.getItem('modeldock_theme') as any) || 'system'
+                      const active = currentTheme === mode
+                      const label = mode === 'system' ? '跟随系统' : mode === 'light' ? '浅色模式' : '深色模式'
+                      return (
+                        <button
+                          key={mode}
+                          onClick={() => handleSetTheme(mode)}
+                          disabled={savingTheme}
+                          className={`rounded px-2.5 py-1 font-medium transition ${
+                            active
+                              ? 'bg-surface text-fg-1 shadow-sm'
+                              : 'text-fg-3 hover:text-fg-1'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* 开机自动启动开关 */}
                 <div className="flex items-center justify-between gap-4 py-2 border-t border-border pt-4">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -2229,11 +2305,23 @@ export default function App() {
               <div className="rounded-panel border border-border bg-surface p-5 shadow-v7-sm space-y-4">
                 <h3 className="text-[14px] font-semibold text-fg-1 flex items-center gap-2">
                   <FolderOpen className="h-4 w-4 text-direct" />
-                  存储与备份目录
+                  系统存储与配置备份目录
                 </h3>
 
                 <div className="space-y-3 border-t border-border pt-3">
                   <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px] font-medium text-fg-1">系统级配置与外观数据持久化文件</div>
+                      <div className="font-mono text-xs text-fg-3 truncate mt-0.5">
+                        ~/.modeldock/store.json（包含主题色彩、供应商列表及网关端口）
+                      </div>
+                    </div>
+                    <span className="rounded bg-direct-soft px-2 py-0.5 text-xs text-direct-text font-medium">
+                      永久持久化
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 border-t border-border/50 pt-3">
                     <div className="min-w-0 flex-1">
                       <div className="text-[13px] font-medium text-fg-1">通用 Skill 大本营</div>
                       <div className="font-mono text-xs text-fg-3 truncate mt-0.5">
@@ -2253,7 +2341,7 @@ export default function App() {
                     <div className="min-w-0 flex-1">
                       <div className="text-[13px] font-medium text-fg-1">配置自动备份历史 (Backups)</div>
                       <div className="font-mono text-xs text-fg-3 truncate mt-0.5">
-                        ~/.ccswitch-lite/backups（每次改写前自动快照留存）
+                        ~/.modeldock/backups（每次改写前自动快照留存）
                       </div>
                     </div>
                     <button

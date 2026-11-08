@@ -23,13 +23,27 @@ export interface AppDatabase {
   proxyUsageLogs: SessionUsageItem[]
 }
 
-export const DATA_DIR = path.join(os.homedir(), '.ccswitch-lite')
+export const DATA_DIR = path.join(os.homedir(), '.modeldock')
+export const LEGACY_DATA_DIR = path.join(os.homedir(), '.ccswitch-lite')
 export const DEFAULT_SKILLS_HUB = path.join(os.homedir(), '.agents', 'skills')
 const DB_FILE = path.join(DATA_DIR, 'store.json')
 export const BACKUP_DIR = path.join(DATA_DIR, 'backups')
 
 export function ensureAppDirs(): void {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true })
+    // Seamlessly migrate previous configuration from .ccswitch-lite if present
+    try {
+      if (fs.existsSync(LEGACY_DATA_DIR)) {
+        const legacyDb = path.join(LEGACY_DATA_DIR, 'store.json')
+        if (fs.existsSync(legacyDb) && !fs.existsSync(DB_FILE)) {
+          fs.copyFileSync(legacyDb, DB_FILE)
+        }
+      }
+    } catch {
+      // ignore migration error
+    }
+  }
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true })
 }
 

@@ -3,6 +3,8 @@ import { join } from 'path'
 import { coreController } from '../core/controller'
 
 function createWindow(): void {
+  const store = coreController.getStore()
+  const isLight = store.theme === 'light'
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 840,
@@ -11,7 +13,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: 'ModelDock · AI 研发工具配置与缓存率监控中心',
-    backgroundColor: '#090d16',
+    backgroundColor: isLight ? '#f8fafc' : '#090d16',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false

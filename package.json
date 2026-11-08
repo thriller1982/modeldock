@@ -8,7 +8,23 @@
     "dev": "electron-vite dev",
     "dev:web": "vite --config vite.config.ts",
     "build": "electron-vite build",
-    "preview": "electron-vite preview"
+    "preview": "electron-vite preview",
+    "package": "electron-vite build && electron-builder --win portable --x64"
+  },
+  "build": {
+    "appId": "com.thriller1982.modeldock",
+    "productName": "ModelDock",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable",
+      "artifactName": "${productName}-v${version}-win-x64.${ext}"
+    }
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -21,6 +37,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
     "electron-vite": "^2.3.0",
     "postcss": "^8.4.49",
     "react": "^18.3.1",
