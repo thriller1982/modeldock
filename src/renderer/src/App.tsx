@@ -547,7 +547,9 @@ export default function App() {
   const [view, setView] = useState<MainView>('app')
   const [activeAppId, setActiveAppId] = useState<TargetId>('codex-desktop')
   const [collapsed, setCollapsed] = useState(false)
-  const [isDark, setIsDark] = useState(true)
+  const [darkPreference, setDarkPreference] = useState<boolean | null>(null)
+  const [savingTheme, setSavingTheme] = useState(false)
+  const isDark = darkPreference ?? true
 
   const [dashboard, setDashboard] = useState<DashboardSnapshot | null>(null)
   const [desktopTargets, setDesktopTargets] = useState<TargetStatus[]>([])
@@ -599,9 +601,13 @@ export default function App() {
   const refreshAll = async () => {
     setLoading(true)
     try {
+      const targets = clientApi.getTargets().then((data) => {
+        setDarkPreference((current) => current ?? (data.store.theme !== 'light'))
+        return data
+      })
       const [dashData, targetsData, skillsData, autoLaunchData] = await Promise.all([
         clientApi.getDashboard(),
-        clientApi.getTargets(),
+        targets,
         clientApi.getSkills(),
         clientApi.getAutoLaunch().catch(() => ({ enabled: false, isPackaged: false }))
       ])
@@ -624,6 +630,19 @@ export default function App() {
   useEffect(() => {
     refreshAll()
   }, [])
+
+  const toggleTheme = async () => {
+    const next = isDark ? 'light' : 'dark'
+    setSavingTheme(true)
+    try {
+      await clientApi.updateTheme(next)
+      setDarkPreference(next === 'dark')
+    } catch {
+      notify('保存外观设置失败')
+    } finally {
+      setSavingTheme(false)
+    }
+  }
 
   useEffect(() => {
     if (!['app', 'usage', 'sessions'].includes(view) || loading) return
@@ -1026,7 +1045,8 @@ export default function App() {
           </button>
 
           <button
-            onClick={() => setIsDark(!isDark)}
+            onClick={toggleTheme}
+            disabled={darkPreference === null || savingTheme}
             title={isDark ? '切换浅色外观' : '切换深色外观'}
             className="flex h-[28px] w-7 shrink-0 items-center justify-center rounded-control text-fg-2 transition hover:bg-subtle hover:text-fg-1"
           >

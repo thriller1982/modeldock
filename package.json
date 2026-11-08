@@ -1,6 +1,6 @@
 {
   "name": "cc-switch-lite",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Clean AI Coding Assistant Switcher & Token/Cache Monitor (Desktop vs CLI)",
   "main": "dist-electron/main/index.js",
   "scripts": {
